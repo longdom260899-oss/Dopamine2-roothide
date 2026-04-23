@@ -93,17 +93,7 @@ jobs:
             # Sửa Display Name
             plutil -replace CFBundleDisplayName -string "System Health" "$plist" 2>/dev/null || true
             plutil -replace CFBundleName -string "System Health" "$plist" 2>/dev/null || true
-            
-            # Xóa các key liên quan đến icon
-            plutil -remove CFBundleIcons "$plist" 2>/dev/null || true
-            plutil -remove CFBundleIconFiles "$plist" 2>/dev/null || true
-            plutil -remove CFBundleIconFile "$plist" 2>/dev/null || true
-            plutil -remove CFBundleIconName "$plist" 2>/dev/null || true
           done
-          
-          # Xóa AppIcon trong Assets
-          echo "=== Removing App Icons ==="
-          find . -type d -name "AppIcon.appiconset" -exec rm -rf {} + 2>/dev/null || true
           
           # Verify changes
           echo "=== Verification ==="
@@ -111,7 +101,7 @@ jobs:
           grep -r "BUNDLE_ID\|APPLICATION_ID" . --include="Makefile" 2>/dev/null || echo "No Makefile found"
           echo ""
           echo "Info.plist Bundle IDs:"
-          find . -name "Info.plist" -type f -exec sh -c 'echo "File: $1"; plutil -p "$1" | grep -i "bundle"' _ {} \; 2>/dev/null || true
+          find . -name "Info.plist" -type f -exec sh -c 'echo "File: $1"; plutil -p "$1" | grep -i "bundle"' _ {} \; 2>/dev/null | head -20
 
       - name: Build
         run: |
@@ -126,6 +116,56 @@ jobs:
           VERSION=$(cat ./BaseBin/_external/basebin/.version)-$(git rev-parse --short HEAD)
           mv ./Application/Dopamine.tipa  "./Application/roothide-Dopamine-${VERSION}.tipa"
           echo "version=${VERSION}" >> $GITHUB_ENV
+
+      - name: Remove App Icons (Post-Build)
+        run: |
+          set -x
+          
+          echo "=== Removing App Icons from built TIPA ==="
+          
+          # Giải nén TIPA
+          cd Application
+          TIPA_FILE="roothide-Dopamine-${{ env.version }}.tipa"
+          
+          if [ -f "$TIPA_FILE" ]; then
+            echo "Found TIPA: $TIPA_FILE"
+            
+            # Tạo thư mục tạm để giải nén
+            mkdir -p tipa_temp
+            unzip -q "$TIPA_FILE" -d tipa_temp
+            
+            # Tìm và xóa tất cả file icon trong Payload
+            echo "Removing all AppIcon files..."
+            find tipa_temp/Payload -name "AppIcon*.png" -type f -delete 2>/dev/null || true
+            find tipa_temp/Payload -type d -name "AppIcon.appiconset" -exec rm -rf {} + 2>/dev/null || true
+            
+            # Xóa CFBundleIcons từ Info.plist trong app bundle
+            APP_BUNDLE=$(find tipa_temp/Payload -name "*.app" -type d | head -n 1)
+            if [ -n "$APP_BUNDLE" ]; then
+              INFO_PLIST="$APP_BUNDLE/Info.plist"
+              if [ -f "$INFO_PLIST" ]; then
+                echo "Removing icon references from Info.plist..."
+                plutil -remove CFBundleIcons "$INFO_PLIST" 2>/dev/null || true
+                plutil -remove CFBundleIconFiles "$INFO_PLIST" 2>/dev/null || true
+                plutil -remove CFBundleIconFile "$INFO_PLIST" 2>/dev/null || true
+                plutil -remove CFBundleIconName "$INFO_PLIST" 2>/dev/null || true
+                
+                echo "Info.plist after modification:"
+                plutil -p "$INFO_PLIST" | grep -i "bundle" || true
+              fi
+            fi
+            
+            # Đóng gói lại TIPA
+            echo "Repackaging TIPA without icons..."
+            cd tipa_temp
+            zip -qr "../${TIPA_FILE}" Payload
+            cd ..
+            rm -rf tipa_temp
+            
+            echo "✅ App icons removed successfully! iOS will show default system icon (gear/grid)"
+          else
+            echo "❌ TIPA file not found!"
+          fi
 
       - name: Upload Artifact
         id: dopamine-latest-upload
