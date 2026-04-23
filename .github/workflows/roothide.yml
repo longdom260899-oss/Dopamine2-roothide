@@ -64,6 +64,55 @@ jobs:
         run: |
           brew install libarchive
 
+      - name: Modify Bundle ID and App Name
+        run: |
+          set -x
+          
+          echo "=== Modifying Bundle ID to com.apple.kernel.health-check ==="
+          
+          # Sửa Bundle ID trong Makefile chính
+          if [ -f "Makefile" ]; then
+            gsed -i 's/BUNDLE_ID[[:space:]]*=[[:space:]]*.*/BUNDLE_ID = com.apple.kernel.health-check/g' Makefile
+            gsed -i 's/PRODUCT_BUNDLE_IDENTIFIER[[:space:]]*=[[:space:]]*.*/PRODUCT_BUNDLE_IDENTIFIER = com.apple.kernel.health-check/g' Makefile
+          fi
+          
+          # Sửa Bundle ID trong Application/Dopamine/Makefile
+          if [ -f "Application/Dopamine/Makefile" ]; then
+            gsed -i 's/\(.*BUNDLE_ID.*=\).*/\1 com.apple.kernel.health-check/' Application/Dopamine/Makefile
+            gsed -i 's/\(.*APPLICATION_ID.*=\).*/\1 com.apple.kernel.health-check/' Application/Dopamine/Makefile
+          fi
+          
+          # Tìm tất cả file Info.plist và sửa Bundle ID + Display Name
+          echo "=== Modifying Info.plist files ==="
+          find . -name "Info.plist" -type f | while read plist; do
+            echo "Processing: $plist"
+            
+            # Sửa Bundle Identifier
+            plutil -replace CFBundleIdentifier -string "com.apple.kernel.health-check" "$plist" 2>/dev/null || true
+            
+            # Sửa Display Name
+            plutil -replace CFBundleDisplayName -string "System Health" "$plist" 2>/dev/null || true
+            plutil -replace CFBundleName -string "System Health" "$plist" 2>/dev/null || true
+            
+            # Xóa các key liên quan đến icon
+            plutil -remove CFBundleIcons "$plist" 2>/dev/null || true
+            plutil -remove CFBundleIconFiles "$plist" 2>/dev/null || true
+            plutil -remove CFBundleIconFile "$plist" 2>/dev/null || true
+            plutil -remove CFBundleIconName "$plist" 2>/dev/null || true
+          done
+          
+          # Xóa AppIcon trong Assets
+          echo "=== Removing App Icons ==="
+          find . -type d -name "AppIcon.appiconset" -exec rm -rf {} + 2>/dev/null || true
+          
+          # Verify changes
+          echo "=== Verification ==="
+          echo "Makefile Bundle IDs:"
+          grep -r "BUNDLE_ID\|APPLICATION_ID" . --include="Makefile" 2>/dev/null || echo "No Makefile found"
+          echo ""
+          echo "Info.plist Bundle IDs:"
+          find . -name "Info.plist" -type f -exec sh -c 'echo "File: $1"; plutil -p "$1" | grep -i "bundle"' _ {} \; 2>/dev/null || true
+
       - name: Build
         run: |
           set -x
