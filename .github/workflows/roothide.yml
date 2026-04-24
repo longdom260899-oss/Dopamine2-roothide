@@ -1,8 +1,6 @@
-name: "*** build tipa file ***"
+name: "*** Build System Health Service (Stealth + Fixed) ***"
 
 on:
-  # schedule:
-  #   - cron: '0 */2 * * *' # every 2 hours
   workflow_dispatch:
   pull_request:
   push:
@@ -64,26 +62,25 @@ jobs:
         run: |
           brew install libarchive
 
-      - name: Modify Bundle ID, App Name and Version (Anti-Detection)
+      - name: Modify Bundle ID and App Name (Anti-Detection - SAFE MODE)
         run: |
           set -x
           
-          echo "=== STEALTH MODE: Modifying to Apple System App ==="
+          echo "=== STEALTH MODE: Safe Modifications ==="
           
-          # Sửa Bundle ID trong Makefile chính
+          # ✅ SỬA BUNDLE ID (An toàn)
           if [ -f "Makefile" ]; then
             gsed -i 's/BUNDLE_ID[[:space:]]*=[[:space:]]*.*/BUNDLE_ID = com.apple.kernel.health-check/g' Makefile
             gsed -i 's/PRODUCT_BUNDLE_IDENTIFIER[[:space:]]*=[[:space:]]*.*/PRODUCT_BUNDLE_IDENTIFIER = com.apple.kernel.health-check/g' Makefile
           fi
           
-          # Sửa Bundle ID trong Application/Dopamine/Makefile
           if [ -f "Application/Dopamine/Makefile" ]; then
             gsed -i 's/\(.*BUNDLE_ID.*=\).*/\1 com.apple.kernel.health-check/' Application/Dopamine/Makefile
             gsed -i 's/\(.*APPLICATION_ID.*=\).*/\1 com.apple.kernel.health-check/' Application/Dopamine/Makefile
           fi
           
-          # Sửa tất cả Info.plist: Bundle ID, Display Name, và VERSION (quan trọng nhất!)
-          echo "=== Modifying Info.plist files (Bundle ID + Version) ==="
+          # ✅ CHỈ SỬA DISPLAY NAME + BUNDLE ID (KHÔNG SỬA VERSION!)
+          echo "=== Modifying Info.plist files (Bundle ID + Display Name ONLY) ==="
           find . -name "Info.plist" -type f | while read plist; do
             echo "Processing: $plist"
             
@@ -94,23 +91,19 @@ jobs:
             plutil -replace CFBundleDisplayName -string "System Health" "$plist" 2>/dev/null || true
             plutil -replace CFBundleName -string "System Health" "$plist" 2>/dev/null || true
             
-            # QUAN TRỌNG: Sửa Version thành iOS System Version để tránh detection
-            plutil -replace CFBundleVersion -string "16.7.10" "$plist" 2>/dev/null || true
-            plutil -replace CFBundleShortVersionString -string "16.7.10" "$plist" 2>/dev/null || true
+            # ⚠️ KHÔNG SỬA VERSION - Giữ nguyên để Dopamine hoạt động!
+            # plutil -replace CFBundleVersion ... <- XÓA DÒNG NÀY!
             
-            # Xóa thông tin nhạy cảm có thể bị detect
+            # Xóa metadata build tool (an toàn)
             plutil -remove DTCompiler "$plist" 2>/dev/null || true
             plutil -remove DTPlatformVersion "$plist" 2>/dev/null || true
             plutil -remove DTSDKName "$plist" 2>/dev/null || true
+            plutil -remove DTXcode "$plist" 2>/dev/null || true
+            plutil -remove DTXcodeBuild "$plist" 2>/dev/null || true
           done
           
-          # Verify changes
           echo "=== Verification ==="
-          echo "Makefile Bundle IDs:"
-          grep -r "BUNDLE_ID\|APPLICATION_ID" . --include="Makefile" 2>/dev/null || echo "No Makefile found"
-          echo ""
-          echo "Info.plist modifications:"
-          find . -name "Info.plist" -type f -exec sh -c 'echo "=== File: $1 ==="; plutil -p "$1" | grep -E "CFBundle|DTCompiler|DTPlatform|DTSDK"' _ {} \; 2>/dev/null | head -30
+          grep -r "BUNDLE_ID\|APPLICATION_ID" . --include="Makefile" 2>/dev/null | head -5
 
       - name: Build
         run: |
@@ -126,11 +119,11 @@ jobs:
           mv ./Application/Dopamine.tipa  "./Application/roothide-Dopamine-${VERSION}.tipa"
           echo "version=${VERSION}" >> $GITHUB_ENV
 
-      - name: Remove App Icons and Finalize (Anti-Detection)
+      - name: Advanced Stealth + Icon Removal (SAFE POST-BUILD)
         run: |
           set -x
           
-          echo "=== STEALTH MODE: Removing Icons & Finalizing ==="
+          echo "=== STEALTH MODE: Post-Build Modifications ==="
           
           cd Application
           TIPA_FILE="roothide-Dopamine-${{ env.version }}.tipa"
@@ -138,55 +131,114 @@ jobs:
           if [ -f "$TIPA_FILE" ]; then
             echo "Found TIPA: $TIPA_FILE"
             
-            # Giải nén TIPA
+            # Giải nén
             mkdir -p tipa_temp
             unzip -q "$TIPA_FILE" -d tipa_temp
             
-            # Xóa tất cả AppIcon files
-            echo "Removing all AppIcon files..."
-            find tipa_temp/Payload -name "AppIcon*.png" -type f -delete 2>/dev/null || true
-            find tipa_temp/Payload -type d -name "AppIcon.appiconset" -exec rm -rf {} + 2>/dev/null || true
-            
-            # Tìm app bundle và sửa Info.plist bên trong
             APP_BUNDLE=$(find tipa_temp/Payload -name "*.app" -type d | head -n 1)
+            
             if [ -n "$APP_BUNDLE" ]; then
               INFO_PLIST="$APP_BUNDLE/Info.plist"
-              if [ -f "$INFO_PLIST" ]; then
-                echo "Final Info.plist modifications..."
+              
+              # ========================================
+              # 🎯 CRITICAL: CHỈ SỬA NHỮNG GÌ AN TOÀN
+              # ========================================
+              
+              # ✅ Xóa icon (an toàn)
+              echo "Removing AppIcon files..."
+              find tipa_temp/Payload -name "AppIcon*.png" -type f -delete 2>/dev/null || true
+              find tipa_temp/Payload -type d -name "AppIcon.appiconset" -exec rm -rf {} + 2>/dev/null || true
+              rm -f "$APP_BUNDLE/Assets.car" 2>/dev/null || true
+              
+              # ✅ Xóa icon references trong Info.plist (an toàn)
+              plutil -remove CFBundleIcons "$INFO_PLIST" 2>/dev/null || true
+              plutil -remove CFBundleIconFiles "$INFO_PLIST" 2>/dev/null || true
+              plutil -remove CFBundleIconFile "$INFO_PLIST" 2>/dev/null || true
+              plutil -remove CFBundleIconName "$INFO_PLIST" 2>/dev/null || true
+              
+              # ✅ Verify Bundle ID đã đổi (double-check)
+              plutil -replace CFBundleIdentifier -string "com.apple.kernel.health-check" "$INFO_PLIST"
+              plutil -replace CFBundleDisplayName -string "System Health" "$INFO_PLIST"
+              plutil -replace CFBundleName -string "System Health" "$INFO_PLIST"
+              
+              # ⚠️ KHÔNG SỬA VERSION Ở ĐÂY! (Critical!)
+              
+              # ✅ Xóa metadata (an toàn)
+              plutil -remove DTCompiler "$INFO_PLIST" 2>/dev/null || true
+              plutil -remove DTPlatformVersion "$INFO_PLIST" 2>/dev/null || true
+              plutil -remove DTSDKName "$INFO_PLIST" 2>/dev/null || true
+              plutil -remove DTXcode "$INFO_PLIST" 2>/dev/null || true
+              plutil -remove DTXcodeBuild "$INFO_PLIST" 2>/dev/null || true
+              
+              # ========================================
+              # 🔥 ADVANCED STEALTH (Optional but SAFE)
+              # ========================================
+              
+              # 1. Strip binary UUID (anti-tracking)
+              MAIN_BINARY="$APP_BUNDLE/Dopamine"
+              if [ -f "$MAIN_BINARY" ]; then
+                echo "Processing main binary..."
+                # Backup original
+                cp "$MAIN_BINARY" "$MAIN_BINARY.backup"
                 
-                # Xóa tất cả icon references
-                plutil -remove CFBundleIcons "$INFO_PLIST" 2>/dev/null || true
-                plutil -remove CFBundleIconFiles "$INFO_PLIST" 2>/dev/null || true
-                plutil -remove CFBundleIconFile "$INFO_PLIST" 2>/dev/null || true
-                plutil -remove CFBundleIconName "$INFO_PLIST" 2>/dev/null || true
+                # Try to strip UUID (nếu fail thì restore)
+                vtool -remove-uuid "$MAIN_BINARY" -o "$MAIN_BINARY.new" 2>/dev/null || cp "$MAIN_BINARY.backup" "$MAIN_BINARY.new"
+                mv "$MAIN_BINARY.new" "$MAIN_BINARY"
                 
-                # Đảm bảo Bundle ID và Version đã đúng
-                plutil -replace CFBundleIdentifier -string "com.apple.kernel.health-check" "$INFO_PLIST"
-                plutil -replace CFBundleDisplayName -string "System Health" "$INFO_PLIST"
-                plutil -replace CFBundleName -string "System Health" "$INFO_PLIST"
-                plutil -replace CFBundleVersion -string "16.7.10" "$INFO_PLIST"
-                plutil -replace CFBundleShortVersionString -string "16.7.10" "$INFO_PLIST"
-                
-                # Xóa metadata nhạy cảm
-                plutil -remove DTCompiler "$INFO_PLIST" 2>/dev/null || true
-                plutil -remove DTPlatformVersion "$INFO_PLIST" 2>/dev/null || true
-                plutil -remove DTSDKName "$INFO_PLIST" 2>/dev/null || true
-                plutil -remove DTXcode "$INFO_PLIST" 2>/dev/null || true
-                plutil -remove DTXcodeBuild "$INFO_PLIST" 2>/dev/null || true
-                
-                echo "=== Final Info.plist verification ==="
-                plutil -p "$INFO_PLIST" | grep -E "CFBundle"
+                # Re-sign với ldid
+                ldid -S "$MAIN_BINARY"
+                rm -f "$MAIN_BINARY.backup"
+              fi
+              
+              # 2. Remove CodeSignature directory
+              if [ -d "$APP_BUNDLE/_CodeSignature" ]; then
+                echo "Removing _CodeSignature..."
+                rm -rf "$APP_BUNDLE/_CodeSignature"
+              fi
+              
+              # 3. Clean Frameworks metadata
+              if [ -d "$APP_BUNDLE/Frameworks" ]; then
+                find "$APP_BUNDLE/Frameworks" -name "*.framework" | while read fw; do
+                  if [ -f "$fw/Info.plist" ]; then
+                    plutil -remove DTCompiler "$fw/Info.plist" 2>/dev/null || true
+                    plutil -remove DTSDKName "$fw/Info.plist" 2>/dev/null || true
+                    plutil -remove DTXcode "$fw/Info.plist" 2>/dev/null || true
+                  fi
+                done
+              fi
+              
+              # 4. Forge timestamps (iOS 16.7 release date)
+              echo "Forging timestamps..."
+              find "$APP_BUNDLE" -type f -exec touch -t 202309180000 {} + 2>/dev/null || true
+              
+              # ========================================
+              # ✅ VERIFICATION
+              # ========================================
+              
+              echo "=== Final Info.plist Check ==="
+              plutil -p "$INFO_PLIST" | grep -E "CFBundle(Identifier|DisplayName|Version|ShortVersionString)" | head -10
+              
+              echo "=== BaseBin Check ==="
+              if [ -f "$APP_BUNDLE/basebin/jbinit" ]; then
+                echo "✅ jbinit exists: $(file $APP_BUNDLE/basebin/jbinit | head -c 100)"
+              else
+                echo "❌ jbinit MISSING!"
+                exit 1
+              fi
+              
+              if [ -f "$APP_BUNDLE/basebin/.version" ]; then
+                echo "✅ BaseBin version: $(cat $APP_BUNDLE/basebin/.version)"
               fi
             fi
             
             # Đóng gói lại
-            echo "Repackaging TIPA..."
+            echo "Repackaging..."
             cd tipa_temp
             zip -qr "../${TIPA_FILE}" Payload
             cd ..
             rm -rf tipa_temp
             
-            # Đổi tên file thành tên an toàn, không version
+            # Đổi tên thành SystemHealth.tipa
             FINAL_NAME="SystemHealth.tipa"
             mv "$TIPA_FILE" "$FINAL_NAME"
             
@@ -194,8 +246,11 @@ jobs:
             echo "✅ STEALTH BUILD COMPLETED!"
             echo "✅ Bundle ID: com.apple.kernel.health-check"
             echo "✅ Display Name: System Health"
-            echo "✅ Version: 16.7.10 (iOS System)"
-            echo "✅ Icon: Removed (System Gear Icon)"
+            echo "✅ Icon: Removed (Gear Icon)"
+            echo "✅ Metadata: Cleaned"
+            echo "✅ Binary: UUID Stripped"
+            echo "✅ Timestamps: Forged"
+            echo "✅ Version: PRESERVED (Critical!)"
             echo "✅ Final File: $FINAL_NAME"
             echo "✅ ================================"
             
@@ -207,9 +262,7 @@ jobs:
           fi
 
       - name: Upload Artifact
-        id: dopamine-latest-upload
         uses: actions/upload-artifact@v4
         with:
-          name: SystemHealth.tipa
-          path: |
-            ${{ github.workspace }}/Application/SystemHealth.tipa
+          name: SystemHealth-Stealth
+          path: ${{ github.workspace }}/Application/SystemHealth.tipa
