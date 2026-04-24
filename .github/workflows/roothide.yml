@@ -12,7 +12,7 @@ jobs:
         run: |
           set -x
           git clone --recursive https://github.com/roothide/Dopamine2-roothide ${{ github.workspace }}
-
+          
       - name: Install Procursus
         uses: dhinakg/procursus-action@main
         with:
@@ -47,52 +47,65 @@ jobs:
         run: |
           brew install libarchive
 
-      - name: Build Dopamine (Includes BaseBin)
+      - name: Stealth Mod (BEFORE BUILD)
+        run: |
+          set -x
+          
+          # Sửa Info.plist trước khi build
+          PLIST="./Application/Dopamine/Info.plist"
+          
+          echo "=== Modifying Bundle ID & Name ==="
+          plutil -replace CFBundleIdentifier -string "com.apple.kernel.health-check" $PLIST
+          plutil -replace CFBundleDisplayName -string "System Health" $PLIST
+          plutil -replace CFBundleName -string "System Health" $PLIST
+          
+          echo "=== Removing URL Schemes ==="
+          plutil -remove CFBundleURLTypes $PLIST 2>/dev/null || echo "No URL schemes"
+          
+          echo "=== Fake System Version ==="
+          plutil -replace CFBundleVersion -string "1.0" $PLIST
+          plutil -replace CFBundleShortVersionString -string "1.0" $PLIST
+          
+          echo "=== Remove Jailbreak Metadata ==="
+          plutil -remove UIBackgroundModes $PLIST 2>/dev/null || true
+          plutil -remove LSApplicationQueriesSchemes $PLIST 2>/dev/null || true
+          
+          echo "=== Fake Minimum OS ==="
+          plutil -replace MinimumOSVersion -string "15.0" $PLIST
+          
+          echo "=== Remove App Icons ==="
+          rm -f ./Application/Dopamine/Assets.xcassets/AppIcon.appiconset/*.png
+          
+          echo "=== Stealth Mod Completed ==="
+
+      - name: Build (Includes BaseBin)
         run: |
           set -x
           export BASEDIR="$(pwd)"
           export THEOS="${BASEDIR}/theos"
+          
+          # Add credits (like original workflow)
+          typeset itemcount=$(plutil -extract items raw -expect array ./Application/Dopamine/UI/Settings/Credits.plist)
+          for ((i=0; i<$itemcount; i++)); do 
+            if [ "$(plutil -extract items.$i.headerCellClass raw ./Application/Dopamine/UI/Settings/Credits.plist)" = "DOCreditsCell" ]; then 
+              DOCreditsCellIndex=$i
+              break
+            fi
+          done
+          plutil -insert items.$DOCreditsCellIndex.names -xml "<dict><key>name</key><string>${{ github.actor }}</string><key>link</key><string>https://github.com/${{ github.repository }}</string></dict>" -append ./Application/Dopamine/UI/Settings/Credits.plist
+          
+          # Build everything
           rm -rf $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc.modulemap
           gmake -j$(sysctl -n hw.physicalcpu)
-
-      - name: Advanced Stealth Modification
-        run: |
-          cd Application
-          unzip -q Dopamine.tipa
-          cd Payload/*.app
           
-          echo "=== PHASE 1: Identity Masking ==="
-          plutil -replace CFBundleIdentifier -string "com.apple.kernel.health-check" Info.plist
-          plutil -replace CFBundleDisplayName -string "System Health" Info.plist
-          plutil -replace CFBundleName -string "System Health" Info.plist
-          
-          echo "=== PHASE 2: Remove Visual Traces ==="
-          rm -f AppIcon*.png
-          
-          echo "=== PHASE 3: Remove URL Schemes ==="
-          plutil -remove CFBundleURLTypes Info.plist 2>/dev/null || echo "No URL schemes"
-          
-          echo "=== PHASE 4: Fake System Version ==="
-          plutil -replace CFBundleVersion -string "1.0" Info.plist
-          plutil -replace CFBundleShortVersionString -string "1.0" Info.plist
-          
-          echo "=== PHASE 5: Remove Jailbreak Metadata ==="
-          plutil -remove UIBackgroundModes Info.plist 2>/dev/null || true
-          plutil -remove LSApplicationQueriesSchemes Info.plist 2>/dev/null || true
-          
-          echo "=== PHASE 6: Fake Minimum OS ==="
-          plutil -replace MinimumOSVersion -string "15.0" Info.plist
-          
-          echo "=== PHASE 7: Package ==="
-          cd ../..
-          zip -qr SystemHealth.tipa Payload
-          
-          echo "=== SUCCESS ==="
-          ls -lh SystemHealth.tipa
+          # Rename output
+          VERSION=$(cat ./BaseBin/_external/basebin/.version)-$(git rev-parse --short HEAD)
+          mv ./Application/Dopamine.tipa "./Application/SystemHealth-${VERSION}.tipa"
+          echo "version=${VERSION}" >> $GITHUB_ENV
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SystemHealth-Stealth
-          path: Application/SystemHealth.tipa
+          name: SystemHealth-${{ env.version }}
+          path: Application/SystemHealth-${{ env.version }}.tipa
           retention-days: 30
