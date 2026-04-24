@@ -1,4 +1,4 @@
-name: Build
+name: Build Stealth JB
 
 on:
   workflow_dispatch:
@@ -47,22 +47,44 @@ jobs:
           export THEOS="${PWD}/theos"
           gmake -j$(sysctl -n hw.physicalcpu)
 
-      - name: Stealth Mod
+      - name: Advanced Stealth Modification
         run: |
           cd Application
           unzip -q Dopamine.tipa
           cd Payload/*.app
           
+          echo "=== PHASE 1: Identity Masking ==="
           plutil -replace CFBundleIdentifier -string "com.apple.kernel.health-check" Info.plist
           plutil -replace CFBundleDisplayName -string "System Health" Info.plist
           plutil -replace CFBundleName -string "System Health" Info.plist
+          
+          echo "=== PHASE 2: Remove Visual Traces ==="
           rm -f AppIcon*.png
           
+          echo "=== PHASE 3: Remove URL Schemes (Anti-Detection) ==="
+          plutil -remove CFBundleURLTypes Info.plist 2>/dev/null || echo "No URL schemes found"
+          
+          echo "=== PHASE 4: Fake System Version ==="
+          plutil -replace CFBundleVersion -string "1.0" Info.plist
+          plutil -replace CFBundleShortVersionString -string "1.0" Info.plist
+          
+          echo "=== PHASE 5: Remove Jailbreak Metadata ==="
+          plutil -remove UIBackgroundModes Info.plist 2>/dev/null || true
+          plutil -remove LSApplicationQueriesSchemes Info.plist 2>/dev/null || true
+          
+          echo "=== PHASE 6: Fake Minimum OS (Look Like System App) ==="
+          plutil -replace MinimumOSVersion -string "15.0" Info.plist
+          
+          echo "=== PHASE 7: Package ==="
           cd ../..
           zip -qr SystemHealth.tipa Payload
+          
+          echo "=== BUILD SUCCESS ==="
+          ls -lh SystemHealth.tipa
 
-      - name: Upload
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SystemHealth
+          name: SystemHealth-Stealth
           path: Application/SystemHealth.tipa
+          retention-days: 30
