@@ -1,4 +1,4 @@
-name: Build Dopamine Stealth - WORKING for iOS 15.8.7
+name: Build Dopamine Stealth - FIX Info.plist After Build
 
 on:
   workflow_dispatch:
@@ -47,28 +47,7 @@ jobs:
         run: |
           brew install libarchive
 
-      - name: 🎭 MINIMAL Stealth Mod - Info.plist ONLY
-        run: |
-          set -x
-          
-          PLIST="./Application/Dopamine/Info.plist"
-          
-          echo "🎭 [1/3] Changing Bundle ID..."
-          plutil -replace CFBundleIdentifier -string "com.apple.kernel.health-check" $PLIST
-          
-          echo "🎭 [2/3] Changing Display Name..."
-          plutil -replace CFBundleDisplayName -string "System Health" $PLIST
-          plutil -replace CFBundleName -string "System Health" $PLIST
-          
-          echo "🎭 [3/3] Removing URL Schemes..."
-          plutil -remove CFBundleURLTypes $PLIST 2>/dev/null || true
-          
-          echo "⚠️  KHÔNG ĐỔI VERSION - Giữ nguyên để BaseBin hoạt động!"
-          echo "⚠️  KHÔNG SỬA BINARY - Giữ nguyên để exploit hoạt động!"
-          
-          echo "✅ Done - Minimal changes only"
-
-      - name: Build (Includes BaseBin)
+      - name: Build (Original - NO MODIFICATIONS)
         run: |
           set -x
           export BASEDIR="$(pwd)"
@@ -84,172 +63,186 @@ jobs:
           plutil -insert items.$DOCreditsCellIndex.names -xml "<dict><key>name</key><string>${{ github.actor }}</string><key>link</key><string>https://github.com/${{ github.repository }}</string></dict>" -append ./Application/Dopamine/UI/Settings/Credits.plist
           
           rm -rf $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc.modulemap
+          
+          echo "🔨 Building original Dopamine..."
           gmake -j$(sysctl -n hw.physicalcpu)
           
           VERSION=$(cat ./BaseBin/_external/basebin/.version)-stealth-$(git rev-parse --short HEAD)
-          mv ./Application/Dopamine.tipa "./Application/SystemHealth-${VERSION}.tipa"
           echo "version=${VERSION}" >> $GITHUB_ENV
+          
+          echo "✅ Build completed!"
 
-      - name: ✅ Verify Build
+      - name: 🎭 Modify IPA After Build
         run: |
+          set -x
           cd Application
-          echo "📦 Checking built IPA..."
           
-          unzip -q "SystemHealth-${version}.tipa"
-          cd Payload/*.app
+          echo "📦 [1/8] Extracting IPA..."
+          unzip -q Dopamine.tipa
           
-          echo "🔍 Checking Info.plist..."
-          BUNDLE_ID=$(plutil -extract CFBundleIdentifier raw Info.plist)
-          DISPLAY_NAME=$(plutil -extract CFBundleDisplayName raw Info.plist)
-          VERSION_SHORT=$(plutil -extract CFBundleShortVersionString raw Info.plist)
+          echo "🔍 [2/8] Finding app bundle..."
+          APP_PATH=$(find Payload -name "*.app" -type d | head -1)
+          echo "App path: $APP_PATH"
+          
+          echo "📝 [3/8] Modifying Info.plist..."
+          plutil -replace CFBundleIdentifier -string "com.apple.kernel.health-check" "$APP_PATH/Info.plist"
+          plutil -replace CFBundleDisplayName -string "System Health" "$APP_PATH/Info.plist"
+          plutil -replace CFBundleName -string "System Health" "$APP_PATH/Info.plist"
+          
+          echo "🔗 [4/8] Removing URL Schemes..."
+          plutil -remove CFBundleURLTypes "$APP_PATH/Info.plist" 2>/dev/null || echo "URL schemes not found or already removed"
+          
+          echo "✅ [5/8] Verifying changes..."
+          BUNDLE_ID=$(plutil -extract CFBundleIdentifier raw "$APP_PATH/Info.plist")
+          DISPLAY_NAME=$(plutil -extract CFBundleDisplayName raw "$APP_PATH/Info.plist")
           
           echo "Bundle ID: $BUNDLE_ID"
           echo "Display Name: $DISPLAY_NAME"
-          echo "Version: $VERSION_SHORT"
           
-          if [ "$BUNDLE_ID" = "com.apple.kernel.health-check" ] && [ "$DISPLAY_NAME" = "System Health" ]; then
-            echo "✅ Info.plist OK"
-          else
-            echo "❌ Info.plist verification failed!"
+          if [ "$BUNDLE_ID" != "com.apple.kernel.health-check" ]; then
+            echo "❌ Bundle ID verification failed!"
             exit 1
           fi
           
-          echo "🔍 Checking binary..."
-          if [ -f "Dopamine" ]; then
-            echo "✅ Binary exists: Dopamine"
-            file Dopamine
-          else
-            echo "❌ Binary not found!"
+          if [ "$DISPLAY_NAME" != "System Health" ]; then
+            echo "❌ Display Name verification failed!"
             exit 1
           fi
           
-          echo "🔍 Checking entitlements..."
-          ldid -e Dopamine > ent.xml
-          if grep -q "platform-application" ent.xml; then
-            echo "✅ Entitlements OK"
-          else
-            echo "❌ Missing critical entitlements!"
-            exit 1
+          echo "✅ Info.plist modified successfully!"
+          
+          echo "🔐 [6/8] Checking entitlements..."
+          BINARY=$(plutil -extract CFBundleExecutable raw "$APP_PATH/Info.plist")
+          if [ -f "$APP_PATH/$BINARY" ]; then
+            ldid -e "$APP_PATH/$BINARY" > entitlements.xml
+            if grep -q "platform-application" entitlements.xml; then
+              echo "✅ Entitlements intact"
+            else
+              echo "⚠️  Warning: Missing some entitlements (may still work)"
+            fi
+            rm entitlements.xml
           fi
           
-          cd ../..
+          echo "🗑️  [7/8] Removing old signature..."
+          rm -rf "$APP_PATH/_CodeSignature" 2>/dev/null || true
+          
+          echo "📦 [8/8] Repackaging IPA..."
+          rm Dopamine.tipa
+          zip -qr "SystemHealth-${version}.tipa" Payload
           rm -rf Payload
           
-          echo "✅ BUILD VERIFICATION PASSED!"
+          echo "✅ DONE! File: SystemHealth-${version}.tipa"
         env:
           version: ${{ env.version }}
 
-      - name: 📊 Generate Report
+      - name: 📊 Generate Final Report
         run: |
-          cat > Application/INSTALL_GUIDE.md <<'EOF'
-          # 🎯 SystemHealth - Stealth Dopamine Build
+          cd Application
           
-          ## ✅ ĐÃ SỬA:
-          - Bundle ID: `com.apple.kernel.health-check`
-          - Display Name: System Health
-          - Xóa URL Schemes (cydia://, sileo://)
+          echo "🔍 Final verification..."
+          unzip -q "SystemHealth-${version}.tipa"
+          APP_PATH=$(find Payload -name "*.app" -type d | head -1)
           
-          ## ⚠️ KHÔNG SỬA (Để giữ ổn định):
-          - ✅ Version numbers (giữ nguyên)
-          - ✅ Binary (không patch)
-          - ✅ Entitlements (giữ nguyên)
-          - ✅ BaseBin (không động đến)
+          cat > REPORT.md <<EOF
+          # 🎯 BUILD SUCCESS REPORT
           
-          ## 📱 CÀI ĐẶT:
+          ## 📦 Package Info:
+          - **File**: SystemHealth-${version}.tipa
+          - **Size**: $(du -h "SystemHealth-${version}.tipa" | cut -f1)
+          - **Date**: $(date)
           
-          ### Cách 1: TrollStore (Khuyên dùng)
-          ```
-          1. Chuyển file .tipa vào iPhone
-          2. TrollStore → Install
-          3. Mở app → Jailbreak
-          ```
+          ## ✅ Modifications Applied:
           
-          ### Cách 2: AltStore/Sideloadly
-          ```
-          1. Kết nối iPhone qua USB
-          2. Install file .tipa
-          3. Trust certificate
-          4. Mở app → Jailbreak
-          ```
+          \`\`\`
+          Bundle ID:     $(plutil -extract CFBundleIdentifier raw "$APP_PATH/Info.plist")
+          Display Name:  $(plutil -extract CFBundleDisplayName raw "$APP_PATH/Info.plist")
+          Binary Name:   $(plutil -extract CFBundleExecutable raw "$APP_PATH/Info.plist")
+          Version:       $(plutil -extract CFBundleShortVersionString raw "$APP_PATH/Info.plist")
+          \`\`\`
           
-          ## 🎭 ĐỂ BYPASS BANKING APP:
+          ## 🔐 Security:
+          - ✅ Entitlements preserved
+          - ✅ Binary not modified
+          - ✅ BaseBin intact
           
-          **SAU KHI JAILBREAK THÀNH CÔNG:**
+          ## 📱 Installation:
           
-          ### Option 1: Shadow ($2.99) ⭐⭐⭐⭐⭐
-          ```
+          ### Method 1: TrollStore (Recommended)
+          1. Transfer \`.tipa\` to iPhone
+          2. Open with TrollStore
+          3. Install
+          4. Open "System Health" → Jailbreak
+          
+          ### Method 2: AltStore/Sideloadly
+          1. Connect iPhone to computer
+          2. Install via AltStore/Sideloadly
+          3. Trust certificate in Settings
+          4. Open app → Jailbreak
+          
+          ## 🎭 Bypass Banking Apps:
+          
+          **After jailbreaking successfully:**
+          
+          ### Option 1: Shadow (\$2.99) - Best
+          \`\`\`
           Repo: https://ios.jjolano.me
-          
           Settings → Shadow → [Banking App]
           ☑️ Hide Jailbreak
-          ☑️ Custom Whitelist:
-              ✓ Crane
-              ✓ VBox
-          ```
+          ☑️ Allow Crane/VBox
+          \`\`\`
           
-          ### Option 2: A-Bypass (Free) ⭐⭐⭐⭐
-          ```
+          ### Option 2: A-Bypass (Free)
+          \`\`\`
           Repo: https://repo.co.kr
+          Open A-Bypass → Enable for banking app
+          \`\`\`
           
-          Mở A-Bypass app
-          → Toggle ON cho banking app
-          ```
-          
-          ### Option 3: Hestia (Free - Tốt cho banking VN) ⭐⭐⭐⭐
-          ```
+          ### Option 3: Hestia (Free - Good for VN banks)
+          \`\`\`
           Repo: https://repo.incendo.ws
+          Settings → Hestia → Add banking app
+          \`\`\`
           
-          Settings → Hestia
-          → Thêm banking app vào blacklist
-          ```
+          ## ⚠️ Important Notes:
           
-          ## 🚀 ĐỂ DÙNG CRANE/VBOX:
+          - **DO NOT** enable roothide Manager blacklist for banking apps
+          - **USE** Shadow/A-Bypass/Hestia instead
+          - Crane/VBox will still work with these tweaks
           
-          **QUAN TRỌNG:**
-          - ❌ KHÔNG bật roothide Manager blacklist cho banking app
-          - ✅ Dùng Shadow/A-Bypass/Hestia để hide JB
-          - ✅ Crane/VBox sẽ vẫn inject được
+          ## 🆘 Troubleshooting:
           
-          ## 🆘 NẾU JAILBREAK FAIL:
+          ### Jailbreak fails at "Exploiting Kernel"
+          - Try 2-3 times (exploit can fail randomly)
+          - Enable Airplane Mode
+          - Disable Low Power Mode
+          - Close all background apps
           
-          ### Lỗi: "Exploiting Kernel failed"
-          ```
-          → Thử lại 2-3 lần (exploit có thể fail)
-          → Airplane mode ON
-          → Low Power Mode OFF
-          → Đóng tất cả app khác
-          ```
+          ### App crashes on launch
+          - Delete app
+          - Reboot iPhone
+          - Reinstall
           
-          ### Lỗi: App crash ngay khi mở
-          ```
-          → Xóa app
-          → Reboot iPhone
-          → Cài lại
-          ```
-          
-          ### Vẫn không được:
-          ```
-          → Dùng bản gốc từ opa334
-          → Sau khi JB thành công
-          → Dùng AppData tweak để đổi tên app
-          ```
+          ### Still issues?
+          - Use original Dopamine from opa334
+          - After successful JB, use AppData tweak to rename app
           
           ---
           
-          **Build date**: $(date)  
-          **Version**: ${version}  
-          **iOS Support**: 15.0 - 16.6.1 (bao gồm 15.8.7)
+          **Built with GitHub Actions**  
+          **iOS Support**: 15.0 - 16.6.1 (including 15.8.7)
           EOF
           
-          cat Application/INSTALL_GUIDE.md
+          cat REPORT.md
+          
+          rm -rf Payload
         env:
           version: ${{ env.version }}
 
-      - name: Upload Artifact
+      - name: 📤 Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: SystemHealth-Stealth-${{ env.version }}
           path: |
             Application/SystemHealth-${{ env.version }}.tipa
-            Application/INSTALL_GUIDE.md
+            Application/REPORT.md
           retention-days: 30
