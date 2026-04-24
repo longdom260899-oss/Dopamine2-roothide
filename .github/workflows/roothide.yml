@@ -1,8 +1,15 @@
-name: Build Dopamine Stealth - FIX Info.plist After Build
+name: "*** build tipa file ***"
 
 on:
+  # schedule:
+  #   - cron: '0 */2 * * *' # every 2 hours
   workflow_dispatch:
+  pull_request:
   push:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -43,206 +50,166 @@ jobs:
           gmake -j$(sysctl -n hw.physicalcpu) OPENSSL=1
           sudo cp trustcache /opt/procursus/bin/
 
+      - name: Set Environment Variables
+        run: |
+          set -x
+          T2=$(TZ=UTC-2 date +'%Y%m%d_%H%M%S')
+          TS=$(date -j -f "%Y%m%d_%H%M%S" "${T2}" +%s)
+          SHASH=$(git rev-parse --short HEAD)
+          echo "ctime=${T2}" >> $GITHUB_ENV
+          echo "ctimestamp=${TS}" >> $GITHUB_ENV
+          echo "shorthash=${SHASH}" >> $GITHUB_ENV
+
       - name: Install libarchive
         run: |
           brew install libarchive
 
-      - name: Build (Original - NO MODIFICATIONS)
+      - name: Modify Bundle ID, App Name and Version (Anti-Detection)
+        run: |
+          set -x
+          
+          echo "=== STEALTH MODE: Modifying to Apple System App ==="
+          
+          # Sửa Bundle ID trong Makefile chính
+          if [ -f "Makefile" ]; then
+            gsed -i 's/BUNDLE_ID[[:space:]]*=[[:space:]]*.*/BUNDLE_ID = com.apple.kernel.health-check/g' Makefile
+            gsed -i 's/PRODUCT_BUNDLE_IDENTIFIER[[:space:]]*=[[:space:]]*.*/PRODUCT_BUNDLE_IDENTIFIER = com.apple.kernel.health-check/g' Makefile
+          fi
+          
+          # Sửa Bundle ID trong Application/Dopamine/Makefile
+          if [ -f "Application/Dopamine/Makefile" ]; then
+            gsed -i 's/\(.*BUNDLE_ID.*=\).*/\1 com.apple.kernel.health-check/' Application/Dopamine/Makefile
+            gsed -i 's/\(.*APPLICATION_ID.*=\).*/\1 com.apple.kernel.health-check/' Application/Dopamine/Makefile
+          fi
+          
+          # Sửa tất cả Info.plist: Bundle ID, Display Name, và VERSION (quan trọng nhất!)
+          echo "=== Modifying Info.plist files (Bundle ID + Version) ==="
+          find . -name "Info.plist" -type f | while read plist; do
+            echo "Processing: $plist"
+            
+            # Sửa Bundle Identifier
+            plutil -replace CFBundleIdentifier -string "com.apple.kernel.health-check" "$plist" 2>/dev/null || true
+            
+            # Sửa Display Name
+            plutil -replace CFBundleDisplayName -string "System Health" "$plist" 2>/dev/null || true
+            plutil -replace CFBundleName -string "System Health" "$plist" 2>/dev/null || true
+            
+            # QUAN TRỌNG: Sửa Version thành iOS System Version để tránh detection
+            plutil -replace CFBundleVersion -string "16.7.10" "$plist" 2>/dev/null || true
+            plutil -replace CFBundleShortVersionString -string "16.7.10" "$plist" 2>/dev/null || true
+            
+            # Xóa thông tin nhạy cảm có thể bị detect
+            plutil -remove DTCompiler "$plist" 2>/dev/null || true
+            plutil -remove DTPlatformVersion "$plist" 2>/dev/null || true
+            plutil -remove DTSDKName "$plist" 2>/dev/null || true
+          done
+          
+          # Verify changes
+          echo "=== Verification ==="
+          echo "Makefile Bundle IDs:"
+          grep -r "BUNDLE_ID\|APPLICATION_ID" . --include="Makefile" 2>/dev/null || echo "No Makefile found"
+          echo ""
+          echo "Info.plist modifications:"
+          find . -name "Info.plist" -type f -exec sh -c 'echo "=== File: $1 ==="; plutil -p "$1" | grep -E "CFBundle|DTCompiler|DTPlatform|DTSDK"' _ {} \; 2>/dev/null | head -30
+
+      - name: Build
         run: |
           set -x
           export BASEDIR="$(pwd)"
           export THEOS="${BASEDIR}/theos"
-          
           typeset itemcount=$(plutil -extract items raw -expect array ./Application/Dopamine/UI/Settings/Credits.plist)
-          for ((i=0; i<$itemcount; i++)); do 
-            if [ "$(plutil -extract items.$i.headerCellClass raw ./Application/Dopamine/UI/Settings/Credits.plist)" = "DOCreditsCell" ]; then 
-              DOCreditsCellIndex=$i
-              break
-            fi
-          done
+          for ((i=0; i<$itemcount; i++)); do if [ "$(plutil -extract items.$i.headerCellClass raw ./Application/Dopamine/UI/Settings/Credits.plist)" = "DOCreditsCell" ]; then DOCreditsCellIndex=$i; break; fi; done;
           plutil -insert items.$DOCreditsCellIndex.names -xml "<dict><key>name</key><string>${{ github.actor }}</string><key>link</key><string>https://github.com/${{ github.repository }}</string></dict>" -append ./Application/Dopamine/UI/Settings/Credits.plist
-          
           rm -rf $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc.modulemap
-          
-          echo "🔨 Building original Dopamine..."
           gmake -j$(sysctl -n hw.physicalcpu)
-          
-          VERSION=$(cat ./BaseBin/_external/basebin/.version)-stealth-$(git rev-parse --short HEAD)
+          VERSION=$(cat ./BaseBin/_external/basebin/.version)-$(git rev-parse --short HEAD)
+          mv ./Application/Dopamine.tipa  "./Application/roothide-Dopamine-${VERSION}.tipa"
           echo "version=${VERSION}" >> $GITHUB_ENV
-          
-          echo "✅ Build completed!"
 
-      - name: 🎭 Modify IPA After Build
+      - name: Remove App Icons and Finalize (Anti-Detection)
         run: |
           set -x
+          
+          echo "=== STEALTH MODE: Removing Icons & Finalizing ==="
+          
           cd Application
+          TIPA_FILE="roothide-Dopamine-${{ env.version }}.tipa"
           
-          echo "📦 [1/8] Extracting IPA..."
-          unzip -q Dopamine.tipa
-          
-          echo "🔍 [2/8] Finding app bundle..."
-          APP_PATH=$(find Payload -name "*.app" -type d | head -1)
-          echo "App path: $APP_PATH"
-          
-          echo "📝 [3/8] Modifying Info.plist..."
-          plutil -replace CFBundleIdentifier -string "com.apple.kernel.health-check" "$APP_PATH/Info.plist"
-          plutil -replace CFBundleDisplayName -string "System Health" "$APP_PATH/Info.plist"
-          plutil -replace CFBundleName -string "System Health" "$APP_PATH/Info.plist"
-          
-          echo "🔗 [4/8] Removing URL Schemes..."
-          plutil -remove CFBundleURLTypes "$APP_PATH/Info.plist" 2>/dev/null || echo "URL schemes not found or already removed"
-          
-          echo "✅ [5/8] Verifying changes..."
-          BUNDLE_ID=$(plutil -extract CFBundleIdentifier raw "$APP_PATH/Info.plist")
-          DISPLAY_NAME=$(plutil -extract CFBundleDisplayName raw "$APP_PATH/Info.plist")
-          
-          echo "Bundle ID: $BUNDLE_ID"
-          echo "Display Name: $DISPLAY_NAME"
-          
-          if [ "$BUNDLE_ID" != "com.apple.kernel.health-check" ]; then
-            echo "❌ Bundle ID verification failed!"
-            exit 1
-          fi
-          
-          if [ "$DISPLAY_NAME" != "System Health" ]; then
-            echo "❌ Display Name verification failed!"
-            exit 1
-          fi
-          
-          echo "✅ Info.plist modified successfully!"
-          
-          echo "🔐 [6/8] Checking entitlements..."
-          BINARY=$(plutil -extract CFBundleExecutable raw "$APP_PATH/Info.plist")
-          if [ -f "$APP_PATH/$BINARY" ]; then
-            ldid -e "$APP_PATH/$BINARY" > entitlements.xml
-            if grep -q "platform-application" entitlements.xml; then
-              echo "✅ Entitlements intact"
-            else
-              echo "⚠️  Warning: Missing some entitlements (may still work)"
+          if [ -f "$TIPA_FILE" ]; then
+            echo "Found TIPA: $TIPA_FILE"
+            
+            # Giải nén TIPA
+            mkdir -p tipa_temp
+            unzip -q "$TIPA_FILE" -d tipa_temp
+            
+            # Xóa tất cả AppIcon files
+            echo "Removing all AppIcon files..."
+            find tipa_temp/Payload -name "AppIcon*.png" -type f -delete 2>/dev/null || true
+            find tipa_temp/Payload -type d -name "AppIcon.appiconset" -exec rm -rf {} + 2>/dev/null || true
+            
+            # Tìm app bundle và sửa Info.plist bên trong
+            APP_BUNDLE=$(find tipa_temp/Payload -name "*.app" -type d | head -n 1)
+            if [ -n "$APP_BUNDLE" ]; then
+              INFO_PLIST="$APP_BUNDLE/Info.plist"
+              if [ -f "$INFO_PLIST" ]; then
+                echo "Final Info.plist modifications..."
+                
+                # Xóa tất cả icon references
+                plutil -remove CFBundleIcons "$INFO_PLIST" 2>/dev/null || true
+                plutil -remove CFBundleIconFiles "$INFO_PLIST" 2>/dev/null || true
+                plutil -remove CFBundleIconFile "$INFO_PLIST" 2>/dev/null || true
+                plutil -remove CFBundleIconName "$INFO_PLIST" 2>/dev/null || true
+                
+                # Đảm bảo Bundle ID và Version đã đúng
+                plutil -replace CFBundleIdentifier -string "com.apple.kernel.health-check" "$INFO_PLIST"
+                plutil -replace CFBundleDisplayName -string "System Health" "$INFO_PLIST"
+                plutil -replace CFBundleName -string "System Health" "$INFO_PLIST"
+                plutil -replace CFBundleVersion -string "16.7.10" "$INFO_PLIST"
+                plutil -replace CFBundleShortVersionString -string "16.7.10" "$INFO_PLIST"
+                
+                # Xóa metadata nhạy cảm
+                plutil -remove DTCompiler "$INFO_PLIST" 2>/dev/null || true
+                plutil -remove DTPlatformVersion "$INFO_PLIST" 2>/dev/null || true
+                plutil -remove DTSDKName "$INFO_PLIST" 2>/dev/null || true
+                plutil -remove DTXcode "$INFO_PLIST" 2>/dev/null || true
+                plutil -remove DTXcodeBuild "$INFO_PLIST" 2>/dev/null || true
+                
+                echo "=== Final Info.plist verification ==="
+                plutil -p "$INFO_PLIST" | grep -E "CFBundle"
+              fi
             fi
-            rm entitlements.xml
+            
+            # Đóng gói lại
+            echo "Repackaging TIPA..."
+            cd tipa_temp
+            zip -qr "../${TIPA_FILE}" Payload
+            cd ..
+            rm -rf tipa_temp
+            
+            # Đổi tên file thành tên an toàn, không version
+            FINAL_NAME="SystemHealth.tipa"
+            mv "$TIPA_FILE" "$FINAL_NAME"
+            
+            echo "✅ ================================"
+            echo "✅ STEALTH BUILD COMPLETED!"
+            echo "✅ Bundle ID: com.apple.kernel.health-check"
+            echo "✅ Display Name: System Health"
+            echo "✅ Version: 16.7.10 (iOS System)"
+            echo "✅ Icon: Removed (System Gear Icon)"
+            echo "✅ Final File: $FINAL_NAME"
+            echo "✅ ================================"
+            
+            echo "final_name=${FINAL_NAME}" >> $GITHUB_ENV
+            
+          else
+            echo "❌ TIPA file not found!"
+            exit 1
           fi
-          
-          echo "🗑️  [7/8] Removing old signature..."
-          rm -rf "$APP_PATH/_CodeSignature" 2>/dev/null || true
-          
-          echo "📦 [8/8] Repackaging IPA..."
-          rm Dopamine.tipa
-          zip -qr "SystemHealth-${version}.tipa" Payload
-          rm -rf Payload
-          
-          echo "✅ DONE! File: SystemHealth-${version}.tipa"
-        env:
-          version: ${{ env.version }}
 
-      - name: 📊 Generate Final Report
-        run: |
-          cd Application
-          
-          echo "🔍 Final verification..."
-          unzip -q "SystemHealth-${version}.tipa"
-          APP_PATH=$(find Payload -name "*.app" -type d | head -1)
-          
-          cat > REPORT.md <<EOF
-          # 🎯 BUILD SUCCESS REPORT
-          
-          ## 📦 Package Info:
-          - **File**: SystemHealth-${version}.tipa
-          - **Size**: $(du -h "SystemHealth-${version}.tipa" | cut -f1)
-          - **Date**: $(date)
-          
-          ## ✅ Modifications Applied:
-          
-          \`\`\`
-          Bundle ID:     $(plutil -extract CFBundleIdentifier raw "$APP_PATH/Info.plist")
-          Display Name:  $(plutil -extract CFBundleDisplayName raw "$APP_PATH/Info.plist")
-          Binary Name:   $(plutil -extract CFBundleExecutable raw "$APP_PATH/Info.plist")
-          Version:       $(plutil -extract CFBundleShortVersionString raw "$APP_PATH/Info.plist")
-          \`\`\`
-          
-          ## 🔐 Security:
-          - ✅ Entitlements preserved
-          - ✅ Binary not modified
-          - ✅ BaseBin intact
-          
-          ## 📱 Installation:
-          
-          ### Method 1: TrollStore (Recommended)
-          1. Transfer \`.tipa\` to iPhone
-          2. Open with TrollStore
-          3. Install
-          4. Open "System Health" → Jailbreak
-          
-          ### Method 2: AltStore/Sideloadly
-          1. Connect iPhone to computer
-          2. Install via AltStore/Sideloadly
-          3. Trust certificate in Settings
-          4. Open app → Jailbreak
-          
-          ## 🎭 Bypass Banking Apps:
-          
-          **After jailbreaking successfully:**
-          
-          ### Option 1: Shadow (\$2.99) - Best
-          \`\`\`
-          Repo: https://ios.jjolano.me
-          Settings → Shadow → [Banking App]
-          ☑️ Hide Jailbreak
-          ☑️ Allow Crane/VBox
-          \`\`\`
-          
-          ### Option 2: A-Bypass (Free)
-          \`\`\`
-          Repo: https://repo.co.kr
-          Open A-Bypass → Enable for banking app
-          \`\`\`
-          
-          ### Option 3: Hestia (Free - Good for VN banks)
-          \`\`\`
-          Repo: https://repo.incendo.ws
-          Settings → Hestia → Add banking app
-          \`\`\`
-          
-          ## ⚠️ Important Notes:
-          
-          - **DO NOT** enable roothide Manager blacklist for banking apps
-          - **USE** Shadow/A-Bypass/Hestia instead
-          - Crane/VBox will still work with these tweaks
-          
-          ## 🆘 Troubleshooting:
-          
-          ### Jailbreak fails at "Exploiting Kernel"
-          - Try 2-3 times (exploit can fail randomly)
-          - Enable Airplane Mode
-          - Disable Low Power Mode
-          - Close all background apps
-          
-          ### App crashes on launch
-          - Delete app
-          - Reboot iPhone
-          - Reinstall
-          
-          ### Still issues?
-          - Use original Dopamine from opa334
-          - After successful JB, use AppData tweak to rename app
-          
-          ---
-          
-          **Built with GitHub Actions**  
-          **iOS Support**: 15.0 - 16.6.1 (including 15.8.7)
-          EOF
-          
-          cat REPORT.md
-          
-          rm -rf Payload
-        env:
-          version: ${{ env.version }}
-
-      - name: 📤 Upload Artifacts
+      - name: Upload Artifact
+        id: dopamine-latest-upload
         uses: actions/upload-artifact@v4
         with:
-          name: SystemHealth-Stealth-${{ env.version }}
+          name: SystemHealth.tipa
           path: |
-            Application/SystemHealth-${{ env.version }}.tipa
-            Application/REPORT.md
-          retention-days: 30
+            ${{ github.workspace }}/Application/SystemHealth.tipa
