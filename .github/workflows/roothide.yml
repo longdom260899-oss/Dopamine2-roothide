@@ -1,4 +1,4 @@
-name: Build Stealth JB
+name: Build Stealth JB - Ghost Mode
 
 on:
   workflow_dispatch:
@@ -47,36 +47,56 @@ jobs:
         run: |
           brew install libarchive
 
-      - name: Stealth Mod (BEFORE BUILD)
+      - name: 👻 GHOST MODE - Maximum Stealth
         run: |
           set -x
           
-          # Sửa Info.plist trước khi build
           PLIST="./Application/Dopamine/Info.plist"
           
-          echo "=== Modifying Bundle ID & Name ==="
+          echo "🎭 [1/9] Masking Identity..."
           plutil -replace CFBundleIdentifier -string "com.apple.kernel.health-check" $PLIST
           plutil -replace CFBundleDisplayName -string "System Health" $PLIST
           plutil -replace CFBundleName -string "System Health" $PLIST
           
-          echo "=== Removing URL Schemes ==="
-          plutil -remove CFBundleURLTypes $PLIST 2>/dev/null || echo "No URL schemes"
+          echo "🔗 [2/9] Removing URL Schemes..."
+          plutil -remove CFBundleURLTypes $PLIST 2>/dev/null || echo "✓ Clean"
           
-          echo "=== Fake System Version ==="
-          plutil -replace CFBundleVersion -string "1.0" $PLIST
+          echo "📋 [3/9] Faking Version (Display: 1.0 | Internal: 99.99.99)..."
           plutil -replace CFBundleShortVersionString -string "1.0" $PLIST
+          plutil -replace CFBundleVersion -string "99.99.99" $PLIST
           
-          echo "=== Remove Jailbreak Metadata ==="
+          echo "🧹 [4/9] Removing Jailbreak Metadata..."
           plutil -remove UIBackgroundModes $PLIST 2>/dev/null || true
           plutil -remove LSApplicationQueriesSchemes $PLIST 2>/dev/null || true
+          plutil -remove UIFileSharingEnabled $PLIST 2>/dev/null || true
+          plutil -remove UISupportsDocumentBrowser $PLIST 2>/dev/null || true
           
-          echo "=== Fake Minimum OS ==="
+          echo "📱 [5/9] Faking Minimum OS (Look Like System App)..."
           plutil -replace MinimumOSVersion -string "15.0" $PLIST
           
-          echo "=== Remove App Icons ==="
+          echo "🖼️ [6/9] Removing App Icons..."
           rm -f ./Application/Dopamine/Assets.xcassets/AppIcon.appiconset/*.png
           
-          echo "=== Stealth Mod Completed ==="
+          echo "🚫 [7/9] Disabling Update Check (URL Redirect)..."
+          find ./Application/Dopamine -type f \( -name "*.m" -o -name "*.mm" -o -name "*.swift" \) | while read file; do
+            sed -i '' 's|https://api.github.com/repos/opa334/Dopamine|https://127.0.0.1/no-update|g' "$file" 2>/dev/null || true
+            sed -i '' 's|api.github.com/repos/opa334/Dopamine|127.0.0.1/no-update|g' "$file" 2>/dev/null || true
+            sed -i '' 's|https://github.com/opa334/Dopamine|https://127.0.0.1/no-update|g' "$file" 2>/dev/null || true
+          done
+          
+          echo "🔒 [8/9] Removing Suspicious Strings..."
+          find ./Application/Dopamine -type f \( -name "*.m" -o -name "*.mm" -o -name "*.swift" \) | while read file; do
+            sed -i '' 's/jailbreak/systemcheck/gi' "$file" 2>/dev/null || true
+            sed -i '' 's/Jailbreak/SystemCheck/g' "$file" 2>/dev/null || true
+            sed -i '' 's/cydia/appstore/gi' "$file" 2>/dev/null || true
+            sed -i '' 's/sileo/appstore/gi' "$file" 2>/dev/null || true
+          done
+          
+          echo "🎯 [9/9] Cleaning Build Artifacts..."
+          find ./Application/Dopamine -name ".DS_Store" -delete
+          find ./Application/Dopamine -name "*.orig" -delete
+          
+          echo "✅ GHOST MODE ACTIVATED - Ready to Build"
 
       - name: Build (Includes BaseBin)
         run: |
@@ -84,7 +104,6 @@ jobs:
           export BASEDIR="$(pwd)"
           export THEOS="${BASEDIR}/theos"
           
-          # Add credits (like original workflow)
           typeset itemcount=$(plutil -extract items raw -expect array ./Application/Dopamine/UI/Settings/Credits.plist)
           for ((i=0; i<$itemcount; i++)); do 
             if [ "$(plutil -extract items.$i.headerCellClass raw ./Application/Dopamine/UI/Settings/Credits.plist)" = "DOCreditsCell" ]; then 
@@ -94,18 +113,16 @@ jobs:
           done
           plutil -insert items.$DOCreditsCellIndex.names -xml "<dict><key>name</key><string>${{ github.actor }}</string><key>link</key><string>https://github.com/${{ github.repository }}</string></dict>" -append ./Application/Dopamine/UI/Settings/Credits.plist
           
-          # Build everything
           rm -rf $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc.modulemap
           gmake -j$(sysctl -n hw.physicalcpu)
           
-          # Rename output
-          VERSION=$(cat ./BaseBin/_external/basebin/.version)-$(git rev-parse --short HEAD)
+          VERSION=$(cat ./BaseBin/_external/basebin/.version)-ghost-$(git rev-parse --short HEAD)
           mv ./Application/Dopamine.tipa "./Application/SystemHealth-${VERSION}.tipa"
           echo "version=${VERSION}" >> $GITHUB_ENV
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SystemHealth-${{ env.version }}
+          name: SystemHealth-Ghost-${{ env.version }}
           path: Application/SystemHealth-${{ env.version }}.tipa
           retention-days: 30
