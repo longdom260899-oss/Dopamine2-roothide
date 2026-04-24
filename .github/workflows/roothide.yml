@@ -1,64 +1,56 @@
-name: Build Dopamine with ALL Exploits
+name: Build Dopamine Fixed
 
 on:
   workflow_dispatch:
-  push:
 
 jobs:
   build:
     runs-on: macos-14
     
-    # ⚡ QUAN TRỌNG: CẤP QUYỀN ĐẦY ĐỦ
-    permissions:
-      contents: write
-      actions: read
-      packages: write
-    
     steps:
-      - name: Checkout with Submodules
+      - name: Checkout
         run: |
-          set -x
           git clone --recursive https://github.com/roothide/Dopamine2-roothide ${{ github.workspace }}
           
       - name: Install Procursus
         uses: dhinakg/procursus-action@main
         with:
-          packages: ldid findutils sed coreutils make tar gzip
-          
-      - name: 🔧 Fix Permissions (CRITICAL)
-        run: |
-          set -x
-          echo "🔐 Setting up permissions..."
-          
-          # Cấp quyền cho toàn bộ workspace
-          sudo chown -R $(whoami):staff ${{ github.workspace }}
-          sudo chmod -R 755 ${{ github.workspace }}
-          
-          # Tạo thư mục temp với quyền đúng
-          mkdir -p /tmp/dopamine_build
-          sudo chown -R $(whoami):staff /tmp/dopamine_build
-          sudo chmod -R 777 /tmp/dopamine_build
-          
-          echo "✅ Permissions fixed!"
+          packages: ldid findutils sed coreutils make xz
 
-      - name: Install THEOS
+      - name: Install THEOS (FIXED)
         run: |
-          set -x
+          set -ex
           export BASEDIR="$(pwd)"
           export THEOS="${BASEDIR}/theos"
           mkdir -p $THEOS
+          
+          # Clone Theos
           curl -fsSL https://raw.githubusercontent.com/roothide/theos/master/bin/install-theos >> install-theos.sh
           gsed -E "/^\s*get_theos\s*$/,+1 s/^(\s*)(get_sdks)\s*$/\1mkdir -p \${THEOS}\/sdks\n\1touch \${THEOS}\/sdks\/sdk\n\1\2/g" -i install-theos.sh
           bash install-theos.sh
-          curl -L https://github.com/theos/sdks/releases/latest/download/iPhoneOS16.5.sdk.tar.xz --output $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz
-          gunzip $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz
-          tar -xf $THEOS/sdks/iPhoneOS16.5.sdk.tar -C $THEOS/sdks
-          rm $THEOS/sdks/iPhoneOS16.5.sdk.tar
-          cd $BASEDIR
+          
+          # Download SDK
+          curl -L https://github.com/theos/sdks/releases/latest/download/iPhoneOS16.5.sdk.tar.xz \
+            --output $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz
+          
+          # Extract SDK (FIX: Dùng tar trực tiếp, không dùng gunzip)
+          echo "Extracting SDK..."
+          tar -xf $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz -C $THEOS/sdks
+          
+          # Cleanup
+          rm $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz
+          
+          # Verify
+          if [ -d "$THEOS/sdks/iPhoneOS16.5.sdk" ]; then
+            echo "✅ SDK extracted successfully"
+            ls -la $THEOS/sdks/
+          else
+            echo "❌ SDK extraction failed"
+            exit 1
+          fi
 
-      - name: Build and Install trustcache
+      - name: Build trustcache
         run: |
-          set -x
           git clone https://github.com/CRKatri/trustcache
           cd trustcache
           export CFLAGS="$CFLAGS -I$(brew --prefix openssl)/include -arch arm64"
@@ -68,48 +60,13 @@ jobs:
           sudo chmod +x /opt/procursus/bin/trustcache
 
       - name: Install libarchive
-        run: |
-          brew install libarchive
+        run: brew install libarchive
 
-      - name: 🎯 Enable ALL Exploits in Source
+      - name: Build
         run: |
-          set -x
-          
-          echo "🔓 Enabling all exploit options..."
-          
-          # File chứa logic chọn exploit
-          MAIN_FILE="Application/Dopamine/Dopamine/DOUIManager.m"
-          
-          if [ -f "$MAIN_FILE" ]; then
-            echo "📝 Patching $MAIN_FILE..."
-            
-            # Comment out palera1n check
-            gsed -i 's/if.*isPalera1nLoader/\/\/ PATCHED: if (isPalera1nLoader)/' "$MAIN_FILE" || true
-            
-            # Force enable exploit selection
-            gsed -i 's/exploitType = kExploitTypePalera1n/exploitType = kExploitTypeLanda/' "$MAIN_FILE" || true
-            
-            echo "✅ Patched exploit detection"
-          fi
-          
-          # Patch DOEnvironmentManager.m để enable tất cả exploits
-          ENV_FILE="Application/Dopamine/Dopamine/DOEnvironmentManager.m"
-          if [ -f "$ENV_FILE" ]; then
-            echo "📝 Patching $ENV_FILE..."
-            
-            # Bật tất cả exploits
-            gsed -i 's/#if.*PALERA1N.*//g' "$ENV_FILE" || true
-            gsed -i 's/#endif.*\/\/ PALERA1n//g' "$ENV_FILE" || true
-            
-            echo "✅ All exploits enabled"
-          fi
-
-      - name: 🔨 Build with Proper Permissions
-        run: |
-          set -x
+          set -ex
           export BASEDIR="$(pwd)"
           export THEOS="${BASEDIR}/theos"
-          export TMPDIR="/tmp/dopamine_build"
           
           # Add credits
           typeset itemcount=$(plutil -extract items raw -expect array ./Application/Dopamine/UI/Settings/Credits.plist)
@@ -121,254 +78,52 @@ jobs:
           done
           plutil -insert items.$DOCreditsCellIndex.names -xml "<dict><key>name</key><string>${{ github.actor }}</string><key>link</key><string>https://github.com/${{ github.repository }}</string></dict>" -append ./Application/Dopamine/UI/Settings/Credits.plist
           
-          # Clean Xcode includes
+          # Remove xpc
           rm -rf $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc.modulemap
           
-          echo "🔨 Building with ALL exploits..."
+          # Build
+          gmake -j$(sysctl -n hw.physicalcpu)
           
-          # Build với quyền sudo để đảm bảo tar không bị lỗi permission
-          sudo -E gmake -j$(sysctl -n hw.physicalcpu) || {
-            echo "❌ Build failed, trying without sudo..."
-            gmake -j$(sysctl -n hw.physicalcpu)
-          }
-          
-          VERSION=$(cat ./BaseBin/_external/basebin/.version)-full-$(git rev-parse --short HEAD)
+          VERSION=$(cat ./BaseBin/_external/basebin/.version)-stealth-$(git rev-parse --short HEAD)
           echo "version=${VERSION}" >> $GITHUB_ENV
           
           echo "✅ Build completed!"
 
-      - name: 🔍 Verify Exploit Binaries
+      - name: Apply Stealth Modifications
         run: |
-          set -x
+          set -ex
           cd Application
           
-          echo "📦 Extracting IPA to verify exploits..."
+          echo "📦 Extracting IPA..."
           unzip -q Dopamine.tipa
           
           APP_PATH=$(find Payload -name "*.app" -type d | head -1)
+          echo "Found app: $APP_PATH"
           
-          echo "🔍 Checking for exploit binaries..."
-          
-          # List tất cả executable files
-          echo "📋 All executables in app:"
-          find "$APP_PATH" -type f -perm +111 -exec basename {} \;
-          
-          # Check từng exploit
-          EXPLOITS=("landa" "smith" "kfd" "oobPCI")
-          MISSING=()
-          
-          for exploit in "${EXPLOITS[@]}"; do
-            if find "$APP_PATH" -name "*${exploit}*" -type f 2>/dev/null | grep -q .; then
-              echo "✅ Found: $exploit"
-            else
-              echo "⚠️  Missing: $exploit"
-              MISSING+=("$exploit")
-            fi
-          done
-          
-          # Check BaseBin
-          if [ -f "$APP_PATH/basebin.tc" ]; then
-            echo "✅ BaseBin trustcache found"
-          else
-            echo "⚠️  BaseBin trustcache missing"
-          fi
-          
-          if [ ${#MISSING[@]} -gt 0 ]; then
-            echo "⚠️  Some exploits missing: ${MISSING[*]}"
-            echo "⚠️  App may only work on palera1n-booted devices"
-          else
-            echo "✅ All exploits present!"
-          fi
-          
-          rm -rf Payload
-
-      - name: 🎭 Apply Stealth Modifications
-        run: |
-          set -x
-          cd Application
-          
-          echo "📦 Extracting for modifications..."
-          unzip -q Dopamine.tipa
-          
-          APP_PATH=$(find Payload -name "*.app" -type d | head -1)
-          
-          echo "🎭 Applying stealth changes..."
-          
-          # Modify Info.plist
+          echo "🎭 Modifying Info.plist..."
           plutil -replace CFBundleIdentifier -string "com.apple.kernel.health-check" "$APP_PATH/Info.plist"
           plutil -replace CFBundleDisplayName -string "System Health" "$APP_PATH/Info.plist"
           plutil -replace CFBundleName -string "System Health" "$APP_PATH/Info.plist"
           plutil -remove CFBundleURLTypes "$APP_PATH/Info.plist" 2>/dev/null || true
           
-          # Verify
-          BUNDLE_ID=$(plutil -extract CFBundleIdentifier raw "$APP_PATH/Info.plist")
-          echo "Bundle ID: $BUNDLE_ID"
+          echo "🔍 Verifying..."
+          plutil -p "$APP_PATH/Info.plist" | grep -E "(CFBundleIdentifier|CFBundleDisplayName)"
           
-          # Remove old signature
-          rm -rf "$APP_PATH/_CodeSignature" 2>/dev/null || true
+          echo "🗑️  Removing old signature..."
+          rm -rf "$APP_PATH/_CodeSignature"
           
-          # Repackage
+          echo "📦 Repackaging..."
           rm Dopamine.tipa
-          
-          # Dùng sudo tar để tránh permission errors
-          echo "📦 Repackaging with proper permissions..."
-          sudo zip -qr "SystemHealth-${version}.tipa" Payload
-          sudo chown $(whoami):staff "SystemHealth-${version}.tipa"
-          sudo chmod 644 "SystemHealth-${version}.tipa"
+          zip -qr "SystemHealth-${version}.tipa" Payload
           
           rm -rf Payload
           
-          echo "✅ Stealth modifications applied!"
+          echo "✅ Done!"
         env:
           version: ${{ env.version }}
 
-      - name: 📊 Generate Installation Guide
-        run: |
-          cd Application
-          
-          cat > INSTALL_GUIDE.md <<'EOF'
-          # 🎯 SystemHealth - Full Exploit Build
-          
-          ## ✅ Bản này có GÌ:
-          
-          ### Exploits (Tất cả đều có):
-          - ✅ **landa** - Cho iOS 15.0-15.7.x (A9-A11)
-          - ✅ **smith** - Cho iOS 15.0-15.7.1 
-          - ✅ **kfd** - Cho iOS 16.0-16.6.1
-          - ✅ **oobPCI** - Dự phòng
-          
-          ### Stealth:
-          - ✅ Bundle ID: `com.apple.kernel.health-check`
-          - ✅ Display Name: System Health
-          - ✅ URL Schemes: Đã xóa
-          
-          ---
-          
-          ## 📱 CÀI ĐẶT:
-          
-          ### Cách 1: TrollStore (Khuyên dùng)
-          ```
-          1. Chuyển .tipa vào iPhone
-          2. TrollStore → Install
-          3. Mở app "System Health"
-          4. Settings → Exploit: Chọn phù hợp với iOS
-          5. Jailbreak
-          ```
-          
-          ### Cách 2: AltStore/Sideloadly
-          ```
-          1. Kết nối iPhone
-          2. Install .tipa
-          3. Trust certificate
-          4. Mở app → Jailbreak
-          ```
-          
-          ---
-          
-          ## 🎮 CHỌN EXPLOIT PHÙ HỢP:
-          
-          | iOS Version | Device | Exploit khuyên dùng |
-          |-------------|--------|---------------------|
-          | 15.0-15.4.1 | A9-A11 | **landa** |
-          | 15.5-15.7.1 | A9-A11 | **landa** hoặc **smith** |
-          | 15.8-15.8.7 | Tất cả | ⚠️ **Không support** - Dùng palera1n |
-          | 16.0-16.6.1 | Tất cả | **kfd** (mặc định) |
-          
-          ---
-          
-          ## ⚠️ QUAN TRỌNG - iOS 15.8.7:
-          
-          ```
-          Nếu bạn đang dùng iOS 15.8.7:
-          
-          ❌ Dopamine KHÔNG SUPPORT (exploit đã bị vá)
-          ✅ PHẢI DÙNG PALERA1N (checkm8 bootrom)
-          
-          Lý do:
-          - iOS 15.8+ đã vá tất cả software exploits
-          - Chỉ còn bootrom exploit (palera1n) hoạt động
-          - Bản build này KHÔNG THỂ bypass patches của Apple
-          ```
-          
-          ---
-          
-          ## 🎭 BYPASS BANKING APPS:
-          
-          **Sau khi jailbreak thành công:**
-          
-          ### Tweak khuyên dùng:
-          
-          1. **Shadow** ($2.99) - Tốt nhất
-             ```
-             Repo: https://ios.jjolano.me
-             Settings → Shadow → [Banking App]
-             ☑️ Hide Jailbreak
-             ```
-          
-          2. **A-Bypass** (Free)
-             ```
-             Repo: https://repo.co.kr
-             Bật cho banking app cần bypass
-             ```
-          
-          3. **Hestia** (Free - Tốt cho banking VN)
-             ```
-             Repo: https://repo.incendo.ws
-             Thêm banking app vào blacklist
-             ```
-          
-          ---
-          
-          ## 🆘 TROUBLESHOOTING:
-          
-          ### Lỗi: "Failed to exploit kernel"
-          
-          **Nếu iOS 15.8+:**
-          ```
-          → KHÔNG CÓ CÁCH NÀO SỬA!
-          → PHẢI DÙNG PALERA1N!
-          → Hoặc downgrade iOS (nếu có SHSH2 blobs)
-          ```
-          
-          **Nếu iOS 15.7.x hoặc thấp hơn:**
-          ```
-          → Settings → Exploit → Đổi sang exploit khác
-          → Thử landa, smith, hoặc oobPCI
-          → Reboot và thử lại
-          ```
-          
-          **Nếu iOS 16.x:**
-          ```
-          → Settings → Exploit → Chọn kfd
-          → Airplane mode ON
-          → Low Power Mode OFF
-          → Thử lại 2-3 lần
-          ```
-          
-          ---
-          
-          ## 📞 HỖ TRỢ:
-          
-          - GitHub Issues: [Link repo của bạn]
-          - Discord: r/jailbreak
-          - Reddit: r/jailbreak
-          
-          ---
-          
-          **Build Date**: $(date)  
-          **Version**: ${version}  
-          **iOS Support**: 15.0-15.7.1, 16.0-16.6.1 (NOT 15.8+)
-          EOF
-          
-          cat INSTALL_GUIDE.md
-        env:
-          version: ${{ env.version }}
-
-      - name: 📤 Upload Artifacts
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: SystemHealth-FullExploits-${{ env.version }}
-          path: |
-            Application/SystemHealth-${{ env.version }}.tipa
-            Application/INSTALL_GUIDE.md
-          retention-days: 90
+          name: SystemHealth-${{ env.version }}
+          path: Application/SystemHealth-${{ env.version }}.tipa
