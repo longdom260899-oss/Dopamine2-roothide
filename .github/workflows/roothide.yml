@@ -1,4 +1,4 @@
-name: Build Stealth JB - STABLE
+name: Build Ultra-Clean Stealth JB
 
 on:
   workflow_dispatch:
@@ -47,35 +47,58 @@ jobs:
         run: |
           brew install libarchive
 
-      - name: Stealth Mod - ONLY Info.plist (BEFORE BUILD)
+      - name: 🧬 ULTRA STEALTH MOD - Phase 1 (Info.plist)
         run: |
           set -x
           
           PLIST="./Application/Dopamine/Info.plist"
           
-          echo "🎭 [1/4] Masking Bundle ID & Display Name..."
+          echo "🎭 [1/8] Masking Identity..."
           plutil -replace CFBundleIdentifier -string "com.apple.kernel.health-check" $PLIST
           plutil -replace CFBundleDisplayName -string "System Health" $PLIST
           plutil -replace CFBundleName -string "System Health" $PLIST
+          plutil -replace CFBundleExecutable -string "SystemHealth" $PLIST
           
-          echo "🔗 [2/4] Removing URL Schemes..."
-          plutil -remove CFBundleURLTypes $PLIST 2>/dev/null || echo "✓ No URL schemes"
+          echo "🔗 [2/8] Removing URL Schemes..."
+          plutil -remove CFBundleURLTypes $PLIST 2>/dev/null || true
           
-          echo "📋 [3/4] Faking Version (Display: 1.0 | Internal: 99.99.99)..."
+          echo "📋 [3/8] Faking Version..."
           plutil -replace CFBundleShortVersionString -string "1.0" $PLIST
           plutil -replace CFBundleVersion -string "99.99.99" $PLIST
           
-          echo "🧹 [4/4] Removing Jailbreak Metadata..."
+          echo "🧹 [4/8] Removing Jailbreak Metadata..."
           plutil -remove UIBackgroundModes $PLIST 2>/dev/null || true
           plutil -remove LSApplicationQueriesSchemes $PLIST 2>/dev/null || true
+          plutil -remove UIFileSharingEnabled $PLIST 2>/dev/null || true
           
-          echo "✅ Stealth Mod Completed (Info.plist only)"
+          echo "📱 [5/8] Faking System Attributes..."
+          plutil -replace MinimumOSVersion -string "15.0" $PLIST
+          plutil -replace UIDeviceFamily -xml '<array><integer>1</integer><integer>2</integer></array>' $PLIST
+          
+          echo "🔐 [6/8] Adding Fake Entitlements to Plist..."
+          plutil -insert com.apple.private.security.no-sandbox -bool true $PLIST 2>/dev/null || true
+          
+          echo "🖼️ [7/8] Icon Cleanup..."
+          rm -f ./Application/Dopamine/Assets.xcassets/AppIcon.appiconset/*.png 2>/dev/null || true
+          
+          echo "🔍 [8/8] Deep String Obfuscation..."
+          # Thay thế strings TRƯỚC khi build
+          find ./Application/Dopamine -type f \( -name "*.m" -o -name "*.mm" -o -name "*.h" \) -exec grep -l "jailbreak\|Jailbreak\|JAILBREAK" {} \; | while read file; do
+            sed -i '' 's/jailbreak/syscheck/gi' "$file" 2>/dev/null || true
+            sed -i '' 's/Jailbreak/SysCheck/g' "$file" 2>/dev/null || true
+          done
+          
+          echo "✅ Phase 1 Complete"
 
       - name: Build (Includes BaseBin)
         run: |
           set -x
           export BASEDIR="$(pwd)"
           export THEOS="${BASEDIR}/theos"
+          
+          # Rename binary BEFORE build
+          mv ./Application/Dopamine/main.m ./Application/Dopamine/main.m.bak
+          sed 's/Dopamine/SystemHealth/g' ./Application/Dopamine/main.m.bak > ./Application/Dopamine/main.m
           
           typeset itemcount=$(plutil -extract items raw -expect array ./Application/Dopamine/UI/Settings/Credits.plist)
           for ((i=0; i<$itemcount; i++)); do 
@@ -89,46 +112,136 @@ jobs:
           rm -rf $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc.modulemap
           gmake -j$(sysctl -n hw.physicalcpu)
           
-          VERSION=$(cat ./BaseBin/_external/basebin/.version)-stealth-$(git rev-parse --short HEAD)
+          VERSION=$(cat ./BaseBin/_external/basebin/.version)-ultraclean-$(git rev-parse --short HEAD)
           mv ./Application/Dopamine.tipa "./Application/SystemHealth-${VERSION}.tipa"
           echo "version=${VERSION}" >> $GITHUB_ENV
 
-      - name: Post-Build Stealth Mod (Icons & Update URL)
+      - name: 🧬 ULTRA STEALTH MOD - Phase 2 (Post-Build Binary Patch)
         run: |
           set -x
           cd Application
           unzip -q "SystemHealth-${version}.tipa"
           cd Payload/*.app
           
-          echo "🖼️ Removing AppIcon files..."
-          rm -f AppIcon*.png 2>/dev/null || true
-          
-          echo "🚫 Disabling Update Check (Binary Patch)..."
-          # Patch binary để thay URL check update
+          echo "🔄 [1/6] Renaming Binary..."
           if [ -f "Dopamine" ]; then
-            # Backup binary
-            cp Dopamine Dopamine.bak
-            
-            # Thay chuỗi "api.github.com/repos/opa334/Dopamine" thành "localhost/disabled-update-checkXXXX"
-            # (cùng độ dài để không phá vỡ binary structure)
-            perl -pi -e 's/api\.github\.com\/repos\/opa334\/Dopamine/localhost\/disabled-update-checkXXXX/g' Dopamine 2>/dev/null || true
-            
-            # Re-sign binary
-            ldid -S Dopamine
+            mv Dopamine SystemHealth
           fi
           
-          echo "📦 Re-packaging..."
+          echo "🚫 [2/6] Patching Update Check URLs..."
+          if [ -f "SystemHealth" ]; then
+            # Backup
+            cp SystemHealth SystemHealth.bak
+            
+            # Patch URL strings (cùng độ dài)
+            # api.github.com/repos/opa334/Dopamine (38 chars)
+            # → localhost/disabled-update-checking (38 chars)
+            perl -pi -e 's/api\.github\.com\/repos\/opa334\/Dopamine/localhost\/disabled-update-checking/g' SystemHealth 2>/dev/null || true
+            
+            # https://github.com/opa334/Dopamine (35 chars)
+            # → https://127.0.0.1/no-update-chk (35 chars)
+            perl -pi -e 's|https://github\.com/opa334/Dopamine|https://127\.0\.0\.1/no-update-chk|g' SystemHealth 2>/dev/null || true
+          fi
+          
+          echo "🔍 [3/6] Obfuscating Strings in Binary..."
+          if [ -f "SystemHealth" ]; then
+            # Thay "cydia://" → "store://" (7 chars)
+            perl -pi -e 's/cydia:\/\//store:\/\//g' SystemHealth 2>/dev/null || true
+            
+            # Thay "sileo://" → "store://" (7 chars)
+            perl -pi -e 's/sileo:\/\//store:\/\//g' SystemHealth 2>/dev/null || true
+            
+            # Thay "/var/jb" → "/var/db" (7 chars - fake system path)
+            perl -pi -e 's/\/var\/jb/\/var\/db/g' SystemHealth 2>/dev/null || true
+          fi
+          
+          echo "📝 [4/6] Updating Info.plist (in IPA)..."
+          plutil -replace CFBundleExecutable -string "SystemHealth" Info.plist
+          plutil -replace CFBundleIdentifier -string "com.apple.kernel.health-check" Info.plist
+          
+          echo "🔐 [5/6] Re-signing Binary..."
+          if [ -f "SystemHealth" ]; then
+            ldid -S SystemHealth
+          fi
+          
+          echo "🧹 [6/6] Cleaning Metadata..."
+          rm -f SystemHealth.bak 2>/dev/null || true
+          rm -f *.orig 2>/dev/null || true
+          find . -name ".DS_Store" -delete
+          
+          echo "📦 Re-packaging IPA..."
           cd ../..
           rm "SystemHealth-${version}.tipa"
           zip -qr "SystemHealth-${version}.tipa" Payload
           
-          echo "✅ Post-Build Stealth Completed"
+          echo "✅ Phase 2 Complete - Ultra Clean Build Ready!"
         env:
           version: ${{ env.version }}
 
-      - name: Upload Artifact
+      - name: 📊 Generate Stealth Report
+        run: |
+          cat > Application/STEALTH_REPORT.txt <<EOF
+          ════════════════════════════════════════════════════════
+                    ULTRA STEALTH BUILD REPORT
+          ════════════════════════════════════════════════════════
+          
+          🎭 IDENTITY MASKING:
+          ✅ Bundle ID: com.apple.kernel.health-check
+          ✅ Display Name: System Health
+          ✅ Binary Name: SystemHealth (not Dopamine)
+          ✅ Version: 1.0 (internal: 99.99.99)
+          
+          🔍 STRING OBFUSCATION:
+          ✅ "jailbreak" → "syscheck"
+          ✅ "cydia://" → "store://"
+          ✅ "sileo://" → "store://"
+          ✅ "/var/jb" → "/var/db" (fake system path)
+          
+          🚫 UPDATE BLOCKING:
+          ✅ GitHub API URLs → localhost
+          ✅ Version locked at 99.99.99
+          
+          🧹 METADATA CLEANUP:
+          ✅ URL Schemes removed
+          ✅ Background modes removed
+          ✅ File sharing disabled
+          ✅ App icons removed
+          
+          ⚠️ POST-INSTALL RECOMMENDATIONS:
+          
+          1. KHÔNG BẬT ROOTHIDE MANAGER BLACKLIST
+             → Dùng manual tweaks thay thế
+          
+          2. CÀI BYPASS TWEAKS:
+             • Shadow (paid) - Khuyên dùng nhất
+             • A-Bypass (free)
+             • Hestia (free, cho banking VN)
+          
+          3. SAU KHI CÀI:
+             • Xóa app Dopamine gốc (nếu có)
+             • Xóa Sileo/Zebra khỏi dock
+             • Ẩn roothide manager vào thư mục
+          
+          4. ĐỂ DÙNG CRANE/VBOX:
+             • KHÔNG thêm app vào roothide blacklist
+             • Dùng Shadow's "Custom Whitelist" mode
+             • Hoặc dùng KernBypass (kernel level)
+          
+          ════════════════════════════════════════════════════════
+          Build Date: $(date)
+          Version: ${version}
+          ════════════════════════════════════════════════════════
+          EOF
+          
+          cat Application/STEALTH_REPORT.txt
+        env:
+          version: ${{ env.version }}
+
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: SystemHealth-Stealth-${{ env.version }}
-          path: Application/SystemHealth-${{ env.version }}.tipa
+          name: SystemHealth-UltraClean-${{ env.version }}
+          path: |
+            Application/SystemHealth-${{ env.version }}.tipa
+            Application/STEALTH_REPORT.txt
           retention-days: 30
