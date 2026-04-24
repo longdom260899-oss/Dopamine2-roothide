@@ -1,23 +1,19 @@
-name: "*** Build System Health Service (Stealth + Fixed) ***"
+name: Build
 
 on:
   workflow_dispatch:
-  pull_request:
   push:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: macos-14
     steps:
       - name: Checkout
-        run: |
-          set -x
-          git clone --recursive https://github.com/roothide/Dopamine2-roothide ${{ github.workspace }}
-          
+        uses: actions/checkout@v4
+        with:
+          repository: roothide/Dopamine2-roothide
+          submodules: recursive
+
       - name: Install Procursus
         uses: dhinakg/procursus-action@main
         with:
@@ -25,244 +21,48 @@ jobs:
 
       - name: Install THEOS
         run: |
-          set -x
-          export BASEDIR="$(pwd)"
-          export THEOS="${BASEDIR}/theos"
-          mkdir -p $THEOS
-          curl -fsSL https://raw.githubusercontent.com/roothide/theos/master/bin/install-theos >> install-theos.sh
-          gsed -E "/^\s*get_theos\s*$/,+1 s/^(\s*)(get_sdks)\s*$/\1mkdir -p \${THEOS}\/sdks\n\1touch \${THEOS}\/sdks\/sdk\n\1\2/g" -i install-theos.sh
-          bash install-theos.sh
-          curl -L https://github.com/theos/sdks/releases/latest/download/iPhoneOS16.5.sdk.tar.xz --output $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz
-          gunzip $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz
-          tar -xf $THEOS/sdks/iPhoneOS16.5.sdk.tar -C $THEOS/sdks
-          rm $THEOS/sdks/iPhoneOS16.5.sdk.tar
-          cd $BASEDIR
+          export THEOS="${PWD}/theos"
+          git clone --recursive https://github.com/theos/theos.git $THEOS
+          curl -L https://github.com/theos/sdks/releases/latest/download/iPhoneOS16.5.sdk.tar.xz -o sdk.tar.xz
+          tar -xJf sdk.tar.xz -C $THEOS/sdks
 
-      - name: Build and Install trustcache
+      - name: Build trustcache
         run: |
-          set -x
           git clone https://github.com/CRKatri/trustcache
           cd trustcache
-          export CFLAGS="$CFLAGS -I$(brew --prefix openssl)/include -arch arm64"
-          export LDFLAGS="$LDFLAGS -L$(brew --prefix openssl)/lib -arch arm64"
+          export CFLAGS="-I$(brew --prefix openssl)/include -arch arm64"
+          export LDFLAGS="-L$(brew --prefix openssl)/lib -arch arm64"
           gmake -j$(sysctl -n hw.physicalcpu) OPENSSL=1
           sudo cp trustcache /opt/procursus/bin/
 
-      - name: Set Environment Variables
+      - name: Build BaseBin
         run: |
-          set -x
-          T2=$(TZ=UTC-2 date +'%Y%m%d_%H%M%S')
-          TS=$(date -j -f "%Y%m%d_%H%M%S" "${T2}" +%s)
-          SHASH=$(git rev-parse --short HEAD)
-          echo "ctime=${T2}" >> $GITHUB_ENV
-          echo "ctimestamp=${TS}" >> $GITHUB_ENV
-          echo "shorthash=${SHASH}" >> $GITHUB_ENV
-
-      - name: Install libarchive
-        run: |
-          brew install libarchive
-
-      - name: Modify Bundle ID and App Name (Anti-Detection - SAFE MODE)
-        run: |
-          set -x
-          
-          echo "=== STEALTH MODE: Safe Modifications ==="
-          
-          # ✅ SỬA BUNDLE ID (An toàn)
-          if [ -f "Makefile" ]; then
-            gsed -i 's/BUNDLE_ID[[:space:]]*=[[:space:]]*.*/BUNDLE_ID = com.apple.kernel.health-check/g' Makefile
-            gsed -i 's/PRODUCT_BUNDLE_IDENTIFIER[[:space:]]*=[[:space:]]*.*/PRODUCT_BUNDLE_IDENTIFIER = com.apple.kernel.health-check/g' Makefile
-          fi
-          
-          if [ -f "Application/Dopamine/Makefile" ]; then
-            gsed -i 's/\(.*BUNDLE_ID.*=\).*/\1 com.apple.kernel.health-check/' Application/Dopamine/Makefile
-            gsed -i 's/\(.*APPLICATION_ID.*=\).*/\1 com.apple.kernel.health-check/' Application/Dopamine/Makefile
-          fi
-          
-          # ✅ CHỈ SỬA DISPLAY NAME + BUNDLE ID (KHÔNG SỬA VERSION!)
-          echo "=== Modifying Info.plist files (Bundle ID + Display Name ONLY) ==="
-          find . -name "Info.plist" -type f | while read plist; do
-            echo "Processing: $plist"
-            
-            # Sửa Bundle Identifier
-            plutil -replace CFBundleIdentifier -string "com.apple.kernel.health-check" "$plist" 2>/dev/null || true
-            
-            # Sửa Display Name
-            plutil -replace CFBundleDisplayName -string "System Health" "$plist" 2>/dev/null || true
-            plutil -replace CFBundleName -string "System Health" "$plist" 2>/dev/null || true
-            
-            # ⚠️ KHÔNG SỬA VERSION - Giữ nguyên để Dopamine hoạt động!
-            # plutil -replace CFBundleVersion ... <- XÓA DÒNG NÀY!
-            
-            # Xóa metadata build tool (an toàn)
-            plutil -remove DTCompiler "$plist" 2>/dev/null || true
-            plutil -remove DTPlatformVersion "$plist" 2>/dev/null || true
-            plutil -remove DTSDKName "$plist" 2>/dev/null || true
-            plutil -remove DTXcode "$plist" 2>/dev/null || true
-            plutil -remove DTXcodeBuild "$plist" 2>/dev/null || true
-          done
-          
-          echo "=== Verification ==="
-          grep -r "BUNDLE_ID\|APPLICATION_ID" . --include="Makefile" 2>/dev/null | head -5
-
-      - name: Build
-        run: |
-          set -x
-          export BASEDIR="$(pwd)"
-          export THEOS="${BASEDIR}/theos"
-          typeset itemcount=$(plutil -extract items raw -expect array ./Application/Dopamine/UI/Settings/Credits.plist)
-          for ((i=0; i<$itemcount; i++)); do if [ "$(plutil -extract items.$i.headerCellClass raw ./Application/Dopamine/UI/Settings/Credits.plist)" = "DOCreditsCell" ]; then DOCreditsCellIndex=$i; break; fi; done;
-          plutil -insert items.$DOCreditsCellIndex.names -xml "<dict><key>name</key><string>${{ github.actor }}</string><key>link</key><string>https://github.com/${{ github.repository }}</string></dict>" -append ./Application/Dopamine/UI/Settings/Credits.plist
-          rm -rf $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc.modulemap
+          export THEOS="${PWD}/theos"
+          cd basebinaries
           gmake -j$(sysctl -n hw.physicalcpu)
-          VERSION=$(cat ./BaseBin/_external/basebin/.version)-$(git rev-parse --short HEAD)
-          mv ./Application/Dopamine.tipa  "./Application/roothide-Dopamine-${VERSION}.tipa"
-          echo "version=${VERSION}" >> $GITHUB_ENV
+          cd ..
 
-      - name: Advanced Stealth + Icon Removal (SAFE POST-BUILD)
+      - name: Build Dopamine
         run: |
-          set -x
-          
-          echo "=== STEALTH MODE: Post-Build Modifications ==="
-          
-          cd Application
-          TIPA_FILE="roothide-Dopamine-${{ env.version }}.tipa"
-          
-          if [ -f "$TIPA_FILE" ]; then
-            echo "Found TIPA: $TIPA_FILE"
-            
-            # Giải nén
-            mkdir -p tipa_temp
-            unzip -q "$TIPA_FILE" -d tipa_temp
-            
-            APP_BUNDLE=$(find tipa_temp/Payload -name "*.app" -type d | head -n 1)
-            
-            if [ -n "$APP_BUNDLE" ]; then
-              INFO_PLIST="$APP_BUNDLE/Info.plist"
-              
-              # ========================================
-              # 🎯 CRITICAL: CHỈ SỬA NHỮNG GÌ AN TOÀN
-              # ========================================
-              
-              # ✅ Xóa icon (an toàn)
-              echo "Removing AppIcon files..."
-              find tipa_temp/Payload -name "AppIcon*.png" -type f -delete 2>/dev/null || true
-              find tipa_temp/Payload -type d -name "AppIcon.appiconset" -exec rm -rf {} + 2>/dev/null || true
-              rm -f "$APP_BUNDLE/Assets.car" 2>/dev/null || true
-              
-              # ✅ Xóa icon references trong Info.plist (an toàn)
-              plutil -remove CFBundleIcons "$INFO_PLIST" 2>/dev/null || true
-              plutil -remove CFBundleIconFiles "$INFO_PLIST" 2>/dev/null || true
-              plutil -remove CFBundleIconFile "$INFO_PLIST" 2>/dev/null || true
-              plutil -remove CFBundleIconName "$INFO_PLIST" 2>/dev/null || true
-              
-              # ✅ Verify Bundle ID đã đổi (double-check)
-              plutil -replace CFBundleIdentifier -string "com.apple.kernel.health-check" "$INFO_PLIST"
-              plutil -replace CFBundleDisplayName -string "System Health" "$INFO_PLIST"
-              plutil -replace CFBundleName -string "System Health" "$INFO_PLIST"
-              
-              # ⚠️ KHÔNG SỬA VERSION Ở ĐÂY! (Critical!)
-              
-              # ✅ Xóa metadata (an toàn)
-              plutil -remove DTCompiler "$INFO_PLIST" 2>/dev/null || true
-              plutil -remove DTPlatformVersion "$INFO_PLIST" 2>/dev/null || true
-              plutil -remove DTSDKName "$INFO_PLIST" 2>/dev/null || true
-              plutil -remove DTXcode "$INFO_PLIST" 2>/dev/null || true
-              plutil -remove DTXcodeBuild "$INFO_PLIST" 2>/dev/null || true
-              
-              # ========================================
-              # 🔥 ADVANCED STEALTH (Optional but SAFE)
-              # ========================================
-              
-              # 1. Strip binary UUID (anti-tracking)
-              MAIN_BINARY="$APP_BUNDLE/Dopamine"
-              if [ -f "$MAIN_BINARY" ]; then
-                echo "Processing main binary..."
-                # Backup original
-                cp "$MAIN_BINARY" "$MAIN_BINARY.backup"
-                
-                # Try to strip UUID (nếu fail thì restore)
-                vtool -remove-uuid "$MAIN_BINARY" -o "$MAIN_BINARY.new" 2>/dev/null || cp "$MAIN_BINARY.backup" "$MAIN_BINARY.new"
-                mv "$MAIN_BINARY.new" "$MAIN_BINARY"
-                
-                # Re-sign với ldid
-                ldid -S "$MAIN_BINARY"
-                rm -f "$MAIN_BINARY.backup"
-              fi
-              
-              # 2. Remove CodeSignature directory
-              if [ -d "$APP_BUNDLE/_CodeSignature" ]; then
-                echo "Removing _CodeSignature..."
-                rm -rf "$APP_BUNDLE/_CodeSignature"
-              fi
-              
-              # 3. Clean Frameworks metadata
-              if [ -d "$APP_BUNDLE/Frameworks" ]; then
-                find "$APP_BUNDLE/Frameworks" -name "*.framework" | while read fw; do
-                  if [ -f "$fw/Info.plist" ]; then
-                    plutil -remove DTCompiler "$fw/Info.plist" 2>/dev/null || true
-                    plutil -remove DTSDKName "$fw/Info.plist" 2>/dev/null || true
-                    plutil -remove DTXcode "$fw/Info.plist" 2>/dev/null || true
-                  fi
-                done
-              fi
-              
-              # 4. Forge timestamps (iOS 16.7 release date)
-              echo "Forging timestamps..."
-              find "$APP_BUNDLE" -type f -exec touch -t 202309180000 {} + 2>/dev/null || true
-              
-              # ========================================
-              # ✅ VERIFICATION
-              # ========================================
-              
-              echo "=== Final Info.plist Check ==="
-              plutil -p "$INFO_PLIST" | grep -E "CFBundle(Identifier|DisplayName|Version|ShortVersionString)" | head -10
-              
-              echo "=== BaseBin Check ==="
-              if [ -f "$APP_BUNDLE/basebin/jbinit" ]; then
-                echo "✅ jbinit exists: $(file $APP_BUNDLE/basebin/jbinit | head -c 100)"
-              else
-                echo "❌ jbinit MISSING!"
-                exit 1
-              fi
-              
-              if [ -f "$APP_BUNDLE/basebin/.version" ]; then
-                echo "✅ BaseBin version: $(cat $APP_BUNDLE/basebin/.version)"
-              fi
-            fi
-            
-            # Đóng gói lại
-            echo "Repackaging..."
-            cd tipa_temp
-            zip -qr "../${TIPA_FILE}" Payload
-            cd ..
-            rm -rf tipa_temp
-            
-            # Đổi tên thành SystemHealth.tipa
-            FINAL_NAME="SystemHealth.tipa"
-            mv "$TIPA_FILE" "$FINAL_NAME"
-            
-            echo "✅ ================================"
-            echo "✅ STEALTH BUILD COMPLETED!"
-            echo "✅ Bundle ID: com.apple.kernel.health-check"
-            echo "✅ Display Name: System Health"
-            echo "✅ Icon: Removed (Gear Icon)"
-            echo "✅ Metadata: Cleaned"
-            echo "✅ Binary: UUID Stripped"
-            echo "✅ Timestamps: Forged"
-            echo "✅ Version: PRESERVED (Critical!)"
-            echo "✅ Final File: $FINAL_NAME"
-            echo "✅ ================================"
-            
-            echo "final_name=${FINAL_NAME}" >> $GITHUB_ENV
-            
-          else
-            echo "❌ TIPA file not found!"
-            exit 1
-          fi
+          export THEOS="${PWD}/theos"
+          gmake -j$(sysctl -n hw.physicalcpu)
 
-      - name: Upload Artifact
+      - name: Stealth Mod
+        run: |
+          cd Application
+          unzip -q Dopamine.tipa
+          cd Payload/*.app
+          
+          plutil -replace CFBundleIdentifier -string "com.apple.kernel.health-check" Info.plist
+          plutil -replace CFBundleDisplayName -string "System Health" Info.plist
+          plutil -replace CFBundleName -string "System Health" Info.plist
+          rm -f AppIcon*.png
+          
+          cd ../..
+          zip -qr SystemHealth.tipa Payload
+
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: SystemHealth-Stealth
-          path: ${{ github.workspace }}/Application/SystemHealth.tipa
+          name: SystemHealth
+          path: Application/SystemHealth.tipa
