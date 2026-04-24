@@ -1,4 +1,4 @@
-name: Build Stealth JB - Stable & Clean
+name: Build Dopamine Stealth - WORKING for iOS 15.8.7
 
 on:
   workflow_dispatch:
@@ -47,34 +47,26 @@ jobs:
         run: |
           brew install libarchive
 
-      - name: 🎭 Stealth Mod - Phase 1 (BEFORE BUILD - Info.plist only)
+      - name: 🎭 MINIMAL Stealth Mod - Info.plist ONLY
         run: |
           set -x
           
           PLIST="./Application/Dopamine/Info.plist"
           
-          echo "🎭 [1/5] Masking Bundle ID & Display Name..."
+          echo "🎭 [1/3] Changing Bundle ID..."
           plutil -replace CFBundleIdentifier -string "com.apple.kernel.health-check" $PLIST
+          
+          echo "🎭 [2/3] Changing Display Name..."
           plutil -replace CFBundleDisplayName -string "System Health" $PLIST
           plutil -replace CFBundleName -string "System Health" $PLIST
           
-          echo "🔗 [2/5] Removing URL Schemes..."
+          echo "🎭 [3/3] Removing URL Schemes..."
           plutil -remove CFBundleURLTypes $PLIST 2>/dev/null || true
           
-          echo "📋 [3/5] Faking Version..."
-          plutil -replace CFBundleShortVersionString -string "1.0" $PLIST
-          plutil -replace CFBundleVersion -string "99.99.99" $PLIST
+          echo "⚠️  KHÔNG ĐỔI VERSION - Giữ nguyên để BaseBin hoạt động!"
+          echo "⚠️  KHÔNG SỬA BINARY - Giữ nguyên để exploit hoạt động!"
           
-          echo "🧹 [4/5] Removing Jailbreak Metadata..."
-          plutil -remove UIBackgroundModes $PLIST 2>/dev/null || true
-          plutil -remove LSApplicationQueriesSchemes $PLIST 2>/dev/null || true
-          plutil -remove UIFileSharingEnabled $PLIST 2>/dev/null || true
-          plutil -remove UISupportsDocumentBrowser $PLIST 2>/dev/null || true
-          
-          echo "📱 [5/5] Faking Minimum OS..."
-          plutil -replace MinimumOSVersion -string "15.0" $PLIST
-          
-          echo "✅ Phase 1 Complete (Safe modifications only)"
+          echo "✅ Done - Minimal changes only"
 
       - name: Build (Includes BaseBin)
         run: |
@@ -98,190 +90,166 @@ jobs:
           mv ./Application/Dopamine.tipa "./Application/SystemHealth-${VERSION}.tipa"
           echo "version=${VERSION}" >> $GITHUB_ENV
 
-      - name: 🧬 Stealth Mod - Phase 2 (POST-BUILD - Binary & IPA modifications)
+      - name: ✅ Verify Build
         run: |
-          set -x
           cd Application
+          echo "📦 Checking built IPA..."
           
-          echo "📦 [1/9] Extracting IPA..."
           unzip -q "SystemHealth-${version}.tipa"
           cd Payload/*.app
           
-          echo "🔄 [2/9] Renaming Binary..."
+          echo "🔍 Checking Info.plist..."
+          BUNDLE_ID=$(plutil -extract CFBundleIdentifier raw Info.plist)
+          DISPLAY_NAME=$(plutil -extract CFBundleDisplayName raw Info.plist)
+          VERSION_SHORT=$(plutil -extract CFBundleShortVersionString raw Info.plist)
+          
+          echo "Bundle ID: $BUNDLE_ID"
+          echo "Display Name: $DISPLAY_NAME"
+          echo "Version: $VERSION_SHORT"
+          
+          if [ "$BUNDLE_ID" = "com.apple.kernel.health-check" ] && [ "$DISPLAY_NAME" = "System Health" ]; then
+            echo "✅ Info.plist OK"
+          else
+            echo "❌ Info.plist verification failed!"
+            exit 1
+          fi
+          
+          echo "🔍 Checking binary..."
           if [ -f "Dopamine" ]; then
-            mv Dopamine SystemHealth
-            echo "✅ Binary renamed: Dopamine → SystemHealth"
+            echo "✅ Binary exists: Dopamine"
+            file Dopamine
+          else
+            echo "❌ Binary not found!"
+            exit 1
           fi
           
-          echo "🚫 [3/9] Patching Update URLs in Binary..."
-          if [ -f "SystemHealth" ]; then
-            cp SystemHealth SystemHealth.bak
-            
-            # Patch URLs (same length to preserve binary structure)
-            # api.github.com/repos/opa334/Dopamine (38 chars)
-            # → 127.0.0.1/disabled-jb-update-check (38 chars)
-            perl -pi -e 's/api\.github\.com\/repos\/opa334\/Dopamine/127\.0\.0\.1\/disabled-jb-update-check/g' SystemHealth 2>/dev/null || true
-            
-            # github.com/opa334/Dopamine (27 chars)
-            # → 127.0.0.1/no-update-check (27 chars)
-            perl -pi -e 's/github\.com\/opa334\/Dopamine/127\.0\.0\.1\/no-update-check/g' SystemHealth 2>/dev/null || true
-            
-            echo "✅ Update URLs patched"
+          echo "🔍 Checking entitlements..."
+          ldid -e Dopamine > ent.xml
+          if grep -q "platform-application" ent.xml; then
+            echo "✅ Entitlements OK"
+          else
+            echo "❌ Missing critical entitlements!"
+            exit 1
           fi
           
-          echo "🔍 [4/9] Obfuscating Strings..."
-          if [ -f "SystemHealth" ]; then
-            # cydia:// → appst:// (8 chars)
-            perl -pi -e 's/cydia:\/\//appst:\/\//g' SystemHealth 2>/dev/null || true
-            
-            # sileo:// → appst:// (8 chars)
-            perl -pi -e 's/sileo:\/\//appst:\/\//g' SystemHealth 2>/dev/null || true
-            
-            echo "✅ URL schemes obfuscated"
-          fi
-          
-          echo "📝 [5/9] Updating Info.plist in IPA..."
-          plutil -replace CFBundleExecutable -string "SystemHealth" Info.plist
-          plutil -replace CFBundleIdentifier -string "com.apple.kernel.health-check" Info.plist
-          plutil -replace CFBundleDisplayName -string "System Health" Info.plist
-          
-          echo "🖼️ [6/9] Removing App Icons..."
-          rm -f AppIcon*.png 2>/dev/null || true
-          find . -name "AppIcon*.png" -delete 2>/dev/null || true
-          
-          echo "🔐 [7/9] Re-signing Binary with ldid..."
-          if [ -f "SystemHealth" ]; then
-            # Extract original entitlements
-            ldid -e Dopamine.bak > entitlements.xml 2>/dev/null || echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict></dict></plist>' > entitlements.xml
-            
-            # Re-sign with same entitlements
-            ldid -Sentitlements.xml SystemHealth
-            
-            echo "✅ Binary re-signed"
-          fi
-          
-          echo "🧹 [8/9] Cleaning Temporary Files..."
-          rm -f SystemHealth.bak entitlements.xml 2>/dev/null || true
-          rm -f Dopamine.bak 2>/dev/null || true
-          rm -f *.orig 2>/dev/null || true
-          find . -name ".DS_Store" -delete
-          
-          echo "📦 [9/9] Re-packaging IPA..."
           cd ../..
-          rm "SystemHealth-${version}.tipa"
-          zip -qr "SystemHealth-${version}.tipa" Payload
           rm -rf Payload
           
-          echo "✅ Phase 2 Complete!"
+          echo "✅ BUILD VERIFICATION PASSED!"
         env:
           version: ${{ env.version }}
 
-      - name: 📊 Generate Stealth Report
+      - name: 📊 Generate Report
         run: |
-          cat > Application/STEALTH_REPORT.md <<'EOF'
-          # 🎭 STEALTH BUILD REPORT
+          cat > Application/INSTALL_GUIDE.md <<'EOF'
+          # 🎯 SystemHealth - Stealth Dopamine Build
           
-          ## ✅ MODIFICATIONS APPLIED:
+          ## ✅ ĐÃ SỬA:
+          - Bundle ID: `com.apple.kernel.health-check`
+          - Display Name: System Health
+          - Xóa URL Schemes (cydia://, sileo://)
           
-          ### 🆔 Identity Masking:
-          - **Bundle ID**: `com.apple.kernel.health-check`
-          - **Display Name**: System Health
-          - **Binary Name**: SystemHealth (not Dopamine)
-          - **Version**: 1.0 (internal: 99.99.99)
+          ## ⚠️ KHÔNG SỬA (Để giữ ổn định):
+          - ✅ Version numbers (giữ nguyên)
+          - ✅ Binary (không patch)
+          - ✅ Entitlements (giữ nguyên)
+          - ✅ BaseBin (không động đến)
           
-          ### 🔍 String Obfuscation:
-          - `cydia://` → `appst://`
-          - `sileo://` → `appst://`
-          - Update URLs → `127.0.0.1/disabled`
+          ## 📱 CÀI ĐẶT:
           
-          ### 🚫 Removed Elements:
-          - ❌ URL Schemes
-          - ❌ Background Modes
-          - ❌ File Sharing
-          - ❌ App Icons
+          ### Cách 1: TrollStore (Khuyên dùng)
+          ```
+          1. Chuyển file .tipa vào iPhone
+          2. TrollStore → Install
+          3. Mở app → Jailbreak
+          ```
+          
+          ### Cách 2: AltStore/Sideloadly
+          ```
+          1. Kết nối iPhone qua USB
+          2. Install file .tipa
+          3. Trust certificate
+          4. Mở app → Jailbreak
+          ```
+          
+          ## 🎭 ĐỂ BYPASS BANKING APP:
+          
+          **SAU KHI JAILBREAK THÀNH CÔNG:**
+          
+          ### Option 1: Shadow ($2.99) ⭐⭐⭐⭐⭐
+          ```
+          Repo: https://ios.jjolano.me
+          
+          Settings → Shadow → [Banking App]
+          ☑️ Hide Jailbreak
+          ☑️ Custom Whitelist:
+              ✓ Crane
+              ✓ VBox
+          ```
+          
+          ### Option 2: A-Bypass (Free) ⭐⭐⭐⭐
+          ```
+          Repo: https://repo.co.kr
+          
+          Mở A-Bypass app
+          → Toggle ON cho banking app
+          ```
+          
+          ### Option 3: Hestia (Free - Tốt cho banking VN) ⭐⭐⭐⭐
+          ```
+          Repo: https://repo.incendo.ws
+          
+          Settings → Hestia
+          → Thêm banking app vào blacklist
+          ```
+          
+          ## 🚀 ĐỂ DÙNG CRANE/VBOX:
+          
+          **QUAN TRỌNG:**
+          - ❌ KHÔNG bật roothide Manager blacklist cho banking app
+          - ✅ Dùng Shadow/A-Bypass/Hestia để hide JB
+          - ✅ Crane/VBox sẽ vẫn inject được
+          
+          ## 🆘 NẾU JAILBREAK FAIL:
+          
+          ### Lỗi: "Exploiting Kernel failed"
+          ```
+          → Thử lại 2-3 lần (exploit có thể fail)
+          → Airplane mode ON
+          → Low Power Mode OFF
+          → Đóng tất cả app khác
+          ```
+          
+          ### Lỗi: App crash ngay khi mở
+          ```
+          → Xóa app
+          → Reboot iPhone
+          → Cài lại
+          ```
+          
+          ### Vẫn không được:
+          ```
+          → Dùng bản gốc từ opa334
+          → Sau khi JB thành công
+          → Dùng AppData tweak để đổi tên app
+          ```
           
           ---
           
-          ## 📱 POST-INSTALL GUIDE:
-          
-          ### ⚠️ IMPORTANT - ĐỂ DÙNG CRANE/VBOX:
-          
-          **KHÔNG dùng roothide Manager blacklist!**
-          
-          Thay vào đó:
-          
-          #### Option 1: Shadow (Paid $2.99) ⭐⭐⭐⭐⭐
-          ```
-          1. Mua từ Havoc repo
-          2. Settings → Shadow → [Banking App]
-          3. Mode: Custom
-          4. ☑️ Enable Hook Protection
-          5. ☑️ Allow Tweaks: Crane, VBox
-          6. ☑️ Hide Jailbreak Files
-          ```
-          
-          #### Option 2: KernBypass (Free) ⭐⭐⭐⭐
-          ```
-          1. Cài từ: https://repo.hackyouriphone.org
-          2. Settings → KernBypass → [App]
-          3. ☑️ Enable
-          4. ☑️ Allow Tweaks: Crane, VBox
-          ```
-          
-          #### Option 3: A-Bypass (Free) ⭐⭐⭐
-          ```
-          1. Cài từ repo chính thức
-          2. Settings → A-Bypass
-          3. Thêm app vào whitelist
-          ```
-          
-          ---
-          
-          ## 🧪 TESTING CHECKLIST:
-          
-          - [ ] Install SystemHealth.tipa
-          - [ ] Jailbreak successful
-          - [ ] Open banking app (không crash)
-          - [ ] Enable Crane/VBox
-          - [ ] Test tweak injection
-          - [ ] Verify bypass working
-          
-          ---
-          
-          ## 🆘 TROUBLESHOOTING:
-          
-          ### ❌ Vẫn bị phát hiện JB:
-          1. Xóa Dopamine app gốc (nếu có)
-          2. Xóa Sileo/Zebra
-          3. Cài Shadow/KernBypass
-          4. Respring
-          
-          ### ❌ Crane/VBox không inject:
-          1. KHÔNG bật roothide blacklist
-          2. Cài Choicy → Whitelist mode
-          3. Hoặc dùng Shadow Custom mode
-          
-          ### ❌ App crash khi jailbreak:
-          1. Restore rootFS
-          2. Reboot không jailbreak
-          3. Cài lại SystemHealth
-          4. Jailbreak lại
-          
-          ---
-          
-          **Build Date**: $(date)  
-          **Version**: ${version}
+          **Build date**: $(date)  
+          **Version**: ${version}  
+          **iOS Support**: 15.0 - 16.6.1 (bao gồm 15.8.7)
           EOF
           
-          cat Application/STEALTH_REPORT.md
+          cat Application/INSTALL_GUIDE.md
         env:
           version: ${{ env.version }}
 
-      - name: 📤 Upload Build Artifacts
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: SystemHealth-Stealth-${{ env.version }}
           path: |
             Application/SystemHealth-${{ env.version }}.tipa
-            Application/STEALTH_REPORT.md
+            Application/INSTALL_GUIDE.md
           retention-days: 30
