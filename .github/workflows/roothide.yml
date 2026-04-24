@@ -1,4 +1,4 @@
-name: Build Stealth JB - Ghost Mode
+name: Build Stealth JB - STABLE
 
 on:
   workflow_dispatch:
@@ -47,56 +47,29 @@ jobs:
         run: |
           brew install libarchive
 
-      - name: 👻 GHOST MODE - Maximum Stealth
+      - name: Stealth Mod - ONLY Info.plist (BEFORE BUILD)
         run: |
           set -x
           
           PLIST="./Application/Dopamine/Info.plist"
           
-          echo "🎭 [1/9] Masking Identity..."
+          echo "🎭 [1/4] Masking Bundle ID & Display Name..."
           plutil -replace CFBundleIdentifier -string "com.apple.kernel.health-check" $PLIST
           plutil -replace CFBundleDisplayName -string "System Health" $PLIST
           plutil -replace CFBundleName -string "System Health" $PLIST
           
-          echo "🔗 [2/9] Removing URL Schemes..."
-          plutil -remove CFBundleURLTypes $PLIST 2>/dev/null || echo "✓ Clean"
+          echo "🔗 [2/4] Removing URL Schemes..."
+          plutil -remove CFBundleURLTypes $PLIST 2>/dev/null || echo "✓ No URL schemes"
           
-          echo "📋 [3/9] Faking Version (Display: 1.0 | Internal: 99.99.99)..."
+          echo "📋 [3/4] Faking Version (Display: 1.0 | Internal: 99.99.99)..."
           plutil -replace CFBundleShortVersionString -string "1.0" $PLIST
           plutil -replace CFBundleVersion -string "99.99.99" $PLIST
           
-          echo "🧹 [4/9] Removing Jailbreak Metadata..."
+          echo "🧹 [4/4] Removing Jailbreak Metadata..."
           plutil -remove UIBackgroundModes $PLIST 2>/dev/null || true
           plutil -remove LSApplicationQueriesSchemes $PLIST 2>/dev/null || true
-          plutil -remove UIFileSharingEnabled $PLIST 2>/dev/null || true
-          plutil -remove UISupportsDocumentBrowser $PLIST 2>/dev/null || true
           
-          echo "📱 [5/9] Faking Minimum OS (Look Like System App)..."
-          plutil -replace MinimumOSVersion -string "15.0" $PLIST
-          
-          echo "🖼️ [6/9] Removing App Icons..."
-          rm -f ./Application/Dopamine/Assets.xcassets/AppIcon.appiconset/*.png
-          
-          echo "🚫 [7/9] Disabling Update Check (URL Redirect)..."
-          find ./Application/Dopamine -type f \( -name "*.m" -o -name "*.mm" -o -name "*.swift" \) | while read file; do
-            sed -i '' 's|https://api.github.com/repos/opa334/Dopamine|https://127.0.0.1/no-update|g' "$file" 2>/dev/null || true
-            sed -i '' 's|api.github.com/repos/opa334/Dopamine|127.0.0.1/no-update|g' "$file" 2>/dev/null || true
-            sed -i '' 's|https://github.com/opa334/Dopamine|https://127.0.0.1/no-update|g' "$file" 2>/dev/null || true
-          done
-          
-          echo "🔒 [8/9] Removing Suspicious Strings..."
-          find ./Application/Dopamine -type f \( -name "*.m" -o -name "*.mm" -o -name "*.swift" \) | while read file; do
-            sed -i '' 's/jailbreak/systemcheck/gi' "$file" 2>/dev/null || true
-            sed -i '' 's/Jailbreak/SystemCheck/g' "$file" 2>/dev/null || true
-            sed -i '' 's/cydia/appstore/gi' "$file" 2>/dev/null || true
-            sed -i '' 's/sileo/appstore/gi' "$file" 2>/dev/null || true
-          done
-          
-          echo "🎯 [9/9] Cleaning Build Artifacts..."
-          find ./Application/Dopamine -name ".DS_Store" -delete
-          find ./Application/Dopamine -name "*.orig" -delete
-          
-          echo "✅ GHOST MODE ACTIVATED - Ready to Build"
+          echo "✅ Stealth Mod Completed (Info.plist only)"
 
       - name: Build (Includes BaseBin)
         run: |
@@ -116,13 +89,46 @@ jobs:
           rm -rf $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc.modulemap
           gmake -j$(sysctl -n hw.physicalcpu)
           
-          VERSION=$(cat ./BaseBin/_external/basebin/.version)-ghost-$(git rev-parse --short HEAD)
+          VERSION=$(cat ./BaseBin/_external/basebin/.version)-stealth-$(git rev-parse --short HEAD)
           mv ./Application/Dopamine.tipa "./Application/SystemHealth-${VERSION}.tipa"
           echo "version=${VERSION}" >> $GITHUB_ENV
+
+      - name: Post-Build Stealth Mod (Icons & Update URL)
+        run: |
+          set -x
+          cd Application
+          unzip -q "SystemHealth-${version}.tipa"
+          cd Payload/*.app
+          
+          echo "🖼️ Removing AppIcon files..."
+          rm -f AppIcon*.png 2>/dev/null || true
+          
+          echo "🚫 Disabling Update Check (Binary Patch)..."
+          # Patch binary để thay URL check update
+          if [ -f "Dopamine" ]; then
+            # Backup binary
+            cp Dopamine Dopamine.bak
+            
+            # Thay chuỗi "api.github.com/repos/opa334/Dopamine" thành "localhost/disabled-update-checkXXXX"
+            # (cùng độ dài để không phá vỡ binary structure)
+            perl -pi -e 's/api\.github\.com\/repos\/opa334\/Dopamine/localhost\/disabled-update-checkXXXX/g' Dopamine 2>/dev/null || true
+            
+            # Re-sign binary
+            ldid -S Dopamine
+          fi
+          
+          echo "📦 Re-packaging..."
+          cd ../..
+          rm "SystemHealth-${version}.tipa"
+          zip -qr "SystemHealth-${version}.tipa" Payload
+          
+          echo "✅ Post-Build Stealth Completed"
+        env:
+          version: ${{ env.version }}
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SystemHealth-Ghost-${{ env.version }}
+          name: SystemHealth-Stealth-${{ env.version }}
           path: Application/SystemHealth-${{ env.version }}.tipa
           retention-days: 30
