@@ -1,4 +1,4 @@
-name: Build Dopamine 2.4.9.24 - Fix Permissions
+name: Build Dopamine Fixed
 
 on:
   workflow_dispatch:
@@ -8,59 +8,46 @@ jobs:
     runs-on: macos-14
     
     steps:
-      - name: Checkout Latest (2.4.9.24)
+      - name: Checkout
         run: |
-          git clone --recursive --depth 1 https://github.com/roothide/Dopamine2-roothide ${{ github.workspace }}
-          cd ${{ github.workspace }}
-          echo "📦 Current version:"
-          cat ./BaseBin/_external/basebin/.version || echo "Version file not found"
+          git clone --recursive https://github.com/roothide/Dopamine2-roothide ${{ github.workspace }}
           
       - name: Install Procursus
         uses: dhinakg/procursus-action@main
         with:
-          packages: ldid findutils sed coreutils make xz tar gzip
+          packages: ldid findutils sed coreutils make xz
 
-      - name: 🔐 Fix Permissions (CRITICAL)
-        run: |
-          set -x
-          echo "🔐 Fixing permissions for /opt/procursus..."
-          
-          # Cấp quyền cho /opt/procursus
-          sudo chmod -R 777 /opt/procursus
-          
-          # Cấp quyền cho workspace
-          sudo chmod -R 777 ${{ github.workspace }}
-          
-          # Tạo temp dir với quyền đầy đủ
-          mkdir -p /tmp/dopamine_temp
-          sudo chmod -R 777 /tmp/dopamine_temp
-          export TMPDIR=/tmp/dopamine_temp
-          
-          # Verify gtar có quyền
-          ls -la /opt/procursus/bin/gtar || echo "gtar not found yet"
-          
-          echo "✅ Permissions fixed!"
-
-      - name: Install THEOS
+      - name: Install THEOS (FIXED)
         run: |
           set -ex
           export BASEDIR="$(pwd)"
           export THEOS="${BASEDIR}/theos"
           mkdir -p $THEOS
           
+          # Clone Theos
           curl -fsSL https://raw.githubusercontent.com/roothide/theos/master/bin/install-theos >> install-theos.sh
           gsed -E "/^\s*get_theos\s*$/,+1 s/^(\s*)(get_sdks)\s*$/\1mkdir -p \${THEOS}\/sdks\n\1touch \${THEOS}\/sdks\/sdk\n\1\2/g" -i install-theos.sh
           bash install-theos.sh
           
+          # Download SDK
           curl -L https://github.com/theos/sdks/releases/latest/download/iPhoneOS16.5.sdk.tar.xz \
             --output $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz
           
-          tar -xf $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz -C $THEOS/sdks
+          # Extract SDK
+          echo "Extracting SDK..."
+          sudo tar -xf $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz -C $THEOS/sdks
+          
+          # Cleanup
           rm $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz
           
-          # Cấp quyền cho THEOS
-          sudo chmod -R 777 $THEOS
-
+          # Verify
+          if [ -d "$THEOS/sdks/iPhoneOS16.5.sdk" ]; then
+            echo "✅ SDK extracted successfully"
+            ls -la $THEOS/sdks/
+          else
+            echo "❌ SDK extraction failed"
+            exit 1
+          fi
       - name: Build trustcache
         run: |
           git clone https://github.com/CRKatri/trustcache
@@ -70,16 +57,14 @@ jobs:
           gmake -j$(sysctl -n hw.physicalcpu) OPENSSL=1
           sudo cp trustcache /opt/procursus/bin/
           sudo chmod +x /opt/procursus/bin/trustcache
-
       - name: Install libarchive
         run: brew install libarchive
 
-      - name: 🔨 Build with Full Permissions
+      - name: Build
         run: |
           set -ex
           export BASEDIR="$(pwd)"
           export THEOS="${BASEDIR}/theos"
-          export TMPDIR=/tmp/dopamine_temp
           
           # Add credits
           typeset itemcount=$(plutil -extract items raw -expect array ./Application/Dopamine/UI/Settings/Credits.plist)
@@ -89,254 +74,4 @@ jobs:
               break
             fi
           done
-          plutil -insert items.$DOCreditsCellIndex.names -xml "<dict><key>name</key><string>${{ github.actor }}</string><key>link</key><string>https://github.com/${{ github.repository }}</string></dict>" -append ./Application/Dopamine/UI/Settings/Credits.plist
-          
-          rm -rf $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc.modulemap
-          
-          # 🔐 CẤP QUYỀN TOÀN BỘ TRƯỚC KHI BUILD
-          echo "🔐 Setting full permissions before build..."
-          sudo chmod -R 777 .
-          
-          # Verify gtar permissions
-          echo "📋 Checking gtar:"
-          ls -la /opt/procursus/bin/gtar
-          /opt/procursus/bin/gtar --version || echo "gtar check failed"
-          
-          # Build với quyền đầy đủ
-          echo "🔨 Building with full permissions..."
-          gmake -j$(sysctl -n hw.physicalcpu)
-          
-          # Get version
-          VERSION=$(cat ./BaseBin/_external/basebin/.version)-stealth-$(git rev-parse --short HEAD)
-          echo "version=${VERSION}" >> $GITHUB_ENV
-          
-          echo "✅ Build completed - Version: $VERSION"
-
-      - name: 🔍 Verify Build Output
-        run: |
-          set -x
-          cd Application
-          
-          if [ ! -f "Dopamine.tipa" ]; then
-            echo "❌ Dopamine.tipa not found!"
-            ls -la
-            exit 1
-          fi
-          
-          echo "📦 Extracting to verify contents..."
-          unzip -q Dopamine.tipa
-          
-          APP_PATH=$(find Payload -name "*.app" -type d | head -1)
-          
-          echo "🔍 Checking critical files..."
-          
-          # Check binary
-          if [ -f "$APP_PATH/Dopamine" ]; then
-            echo "✅ Main binary found"
-            ls -lh "$APP_PATH/Dopamine"
-          else
-            echo "❌ Main binary missing!"
-          fi
-          
-          # Check BaseBin
-          echo "🔍 BaseBin files:"
-          find "$APP_PATH" -name "*basebin*" -o -name "*.tc" | head -10
-          
-          # Check exploits
-          echo "🔍 Exploit binaries:"
-          find "$APP_PATH" -type f -perm +111 | grep -v "Dopamine$" | head -10
-          
-          # Size check
-          SIZE=$(du -sh "$APP_PATH" | cut -f1)
-          echo "📊 App size: $SIZE"
-          
-          if [ -d "$APP_PATH/basebin.app" ] || [ -f "$APP_PATH/basebin.tc" ]; then
-            echo "✅ BaseBin present"
-          else
-            echo "⚠️  BaseBin may be missing - could cause JB failure!"
-          fi
-          
-          rm -rf Payload
-
-      - name: 🎭 Apply Stealth Modifications
-        run: |
-          set -ex
-          cd Application
-          
-          echo "📦 Extracting..."
-          unzip -q Dopamine.tipa
-          
-          APP_PATH=$(find Payload -name "*.app" -type d | head -1)
-          
-          echo "🎭 Applying stealth mods..."
-          plutil -replace CFBundleIdentifier -string "com.apple.kernel.health-check" "$APP_PATH/Info.plist"
-          plutil -replace CFBundleDisplayName -string "System Health" "$APP_PATH/Info.plist"
-          plutil -replace CFBundleName -string "System Health" "$APP_PATH/Info.plist"
-          plutil -remove CFBundleURLTypes "$APP_PATH/Info.plist" 2>/dev/null || true
-          
-          echo "✅ Modified Info.plist:"
-          plutil -p "$APP_PATH/Info.plist" | grep -E "(CFBundleIdentifier|CFBundleDisplayName|CFBundleVersion)"
-          
-          # Remove signature
-          rm -rf "$APP_PATH/_CodeSignature"
-          
-          # Repackage with permissions
-          echo "📦 Repackaging..."
-          rm Dopamine.tipa
-          
-          # Cấp quyền trước khi zip
-          sudo chmod -R 755 Payload
-          
-          zip -qr "SystemHealth-${version}.tipa" Payload
-          
-          # Verify final file
-          ls -lh "SystemHealth-${version}.tipa"
-          
-          rm -rf Payload
-          
-          echo "✅ Done!"
-        env:
-          version: ${{ env.version }}
-
-      - name: 📊 Generate Report
-        run: |
-          cd Application
-          
-          cat > BUILD_REPORT.md <<EOF
-          # 🎯 SystemHealth - Dopamine ${version}
-          
-          ## ✅ Build Information:
-          
-          \`\`\`
-          Source Version: 2.4.9.24
-          Build Date: $(date)
-          Builder: ${{ github.actor }}
-          File: SystemHealth-${version}.tipa
-          Size: $(ls -lh SystemHealth-${version}.tipa | awk '{print $5}')
-          \`\`\`
-          
-          ## 🔧 Fixes Applied:
-          
-          1. **Permission Fix**: Full write access to /opt/procursus
-          2. **gtar Fix**: Ensured gtar can package all files
-          3. **Build permissions**: chmod 777 before gmake
-          4. **TMPDIR**: Clean temp directory with full access
-          
-          ## 🎭 Stealth Modifications:
-          
-          - ✅ Bundle ID: \`com.apple.kernel.health-check\`
-          - ✅ Display Name: System Health
-          - ✅ URL Schemes: Removed
-          - ✅ Version: Preserved (${version%%-*})
-          
-          ## 📱 Installation:
-          
-          ### TrollStore (Best):
-          \`\`\`
-          1. Transfer .tipa to iPhone
-          2. TrollStore → Install
-          3. Open "System Health"
-          4. Tap Jailbreak → Success! ✅
-          \`\`\`
-          
-          ### AltStore/Sideloadly:
-          \`\`\`
-          1. Connect iPhone via USB
-          2. Install .tipa (auto re-sign)
-          3. Settings → General → VPN & Device Management
-          4. Trust certificate
-          5. Open app → Jailbreak
-          \`\`\`
-          
-          ## 🎮 After Jailbreak:
-          
-          ### Banking App Bypass:
-          
-          **Option 1: Shadow (\$2.99)** - Best
-          \`\`\`
-          Repo: https://ios.jjolano.me
-          Settings → Shadow → [Banking App]
-          ☑️ Hide Jailbreak
-          ☑️ Allow Crane/VBox
-          \`\`\`
-          
-          **Option 2: A-Bypass (Free)**
-          \`\`\`
-          Repo: https://repo.co.kr
-          Open A-Bypass app
-          Enable for banking apps
-          \`\`\`
-          
-          **Option 3: Hestia (Free - Good for VN banks)**
-          \`\`\`
-          Repo: https://repo.incendo.ws
-          Settings → Hestia
-          Add banking apps to blacklist
-          \`\`\`
-          
-          ## 📊 iOS Compatibility:
-          
-          | iOS Version | Status | Notes |
-          |-------------|--------|-------|
-          | 15.0-15.7.1 | ✅ Full | All exploits work |
-          | 15.8-15.8.7 | ⚠️ Partial | May need multiple attempts |
-          | 16.0-16.6.1 | ✅ Full | kfd exploit stable |
-          | 16.7+ | ❌ No | Not supported |
-          
-          ## 🆘 Troubleshooting:
-          
-          ### "Failed to exploit kernel"
-          \`\`\`
-          → Try 2-3 times (exploits can fail randomly)
-          → Enable Airplane Mode
-          → Disable Low Power Mode
-          → Close all background apps
-          → Reboot and try again
-          \`\`\`
-          
-          ### App crashes on launch
-          \`\`\`
-          → Delete app completely
-          → Reboot iPhone
-          → Reinstall
-          \`\`\`
-          
-          ### Still not working?
-          \`\`\`
-          If this build fails but you confirmed original works:
-          
-          1. Use original Dopamine from opa334
-          2. After successful JB, install AppData tweak
-          3. Use AppData to rename app to "System Health"
-          4. Change bundle ID if needed
-          
-          This guarantees it works since original works for you!
-          \`\`\`
-          
-          ## 🔐 Security Note:
-          
-          - This build only changes display name/bundle ID
-          - All exploit code is original from opa334
-          - No malicious modifications
-          - Source code visible on GitHub
-          
-          ---
-          
-          **Enjoy your stealth jailbreak!** 🎉
-          
-          Built with ❤️ by ${{ github.actor }}
-          EOF
-          
-          cat BUILD_REPORT.md
-        env:
-          version: ${{ env.version }}
-
-      - name: 📤 Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: SystemHealth-v${{ env.version }}
-          path: |
-            Application/SystemHealth-${{ env.version }}.tipa
-            Application/BUILD_REPORT.md
-          retention-days: 90
-          if-no-files-found: error
+          plutil -insert
