@@ -146,4 +146,142 @@ jobs:
           plutil -replace CFBundleDisplayName -string "System Health" Info.plist
           
           echo "🖼️ [6/9] Removing App Icons..."
-          rm -f AppIcon*.
+          rm -f AppIcon*.png 2>/dev/null || true
+          find . -name "AppIcon*.png" -delete 2>/dev/null || true
+          
+          echo "🔐 [7/9] Re-signing Binary with ldid..."
+          if [ -f "SystemHealth" ]; then
+            # Extract original entitlements
+            ldid -e Dopamine.bak > entitlements.xml 2>/dev/null || echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict></dict></plist>' > entitlements.xml
+            
+            # Re-sign with same entitlements
+            ldid -Sentitlements.xml SystemHealth
+            
+            echo "✅ Binary re-signed"
+          fi
+          
+          echo "🧹 [8/9] Cleaning Temporary Files..."
+          rm -f SystemHealth.bak entitlements.xml 2>/dev/null || true
+          rm -f Dopamine.bak 2>/dev/null || true
+          rm -f *.orig 2>/dev/null || true
+          find . -name ".DS_Store" -delete
+          
+          echo "📦 [9/9] Re-packaging IPA..."
+          cd ../..
+          rm "SystemHealth-${version}.tipa"
+          zip -qr "SystemHealth-${version}.tipa" Payload
+          rm -rf Payload
+          
+          echo "✅ Phase 2 Complete!"
+        env:
+          version: ${{ env.version }}
+
+      - name: 📊 Generate Stealth Report
+        run: |
+          cat > Application/STEALTH_REPORT.md <<'EOF'
+          # 🎭 STEALTH BUILD REPORT
+          
+          ## ✅ MODIFICATIONS APPLIED:
+          
+          ### 🆔 Identity Masking:
+          - **Bundle ID**: `com.apple.kernel.health-check`
+          - **Display Name**: System Health
+          - **Binary Name**: SystemHealth (not Dopamine)
+          - **Version**: 1.0 (internal: 99.99.99)
+          
+          ### 🔍 String Obfuscation:
+          - `cydia://` → `appst://`
+          - `sileo://` → `appst://`
+          - Update URLs → `127.0.0.1/disabled`
+          
+          ### 🚫 Removed Elements:
+          - ❌ URL Schemes
+          - ❌ Background Modes
+          - ❌ File Sharing
+          - ❌ App Icons
+          
+          ---
+          
+          ## 📱 POST-INSTALL GUIDE:
+          
+          ### ⚠️ IMPORTANT - ĐỂ DÙNG CRANE/VBOX:
+          
+          **KHÔNG dùng roothide Manager blacklist!**
+          
+          Thay vào đó:
+          
+          #### Option 1: Shadow (Paid $2.99) ⭐⭐⭐⭐⭐
+          ```
+          1. Mua từ Havoc repo
+          2. Settings → Shadow → [Banking App]
+          3. Mode: Custom
+          4. ☑️ Enable Hook Protection
+          5. ☑️ Allow Tweaks: Crane, VBox
+          6. ☑️ Hide Jailbreak Files
+          ```
+          
+          #### Option 2: KernBypass (Free) ⭐⭐⭐⭐
+          ```
+          1. Cài từ: https://repo.hackyouriphone.org
+          2. Settings → KernBypass → [App]
+          3. ☑️ Enable
+          4. ☑️ Allow Tweaks: Crane, VBox
+          ```
+          
+          #### Option 3: A-Bypass (Free) ⭐⭐⭐
+          ```
+          1. Cài từ repo chính thức
+          2. Settings → A-Bypass
+          3. Thêm app vào whitelist
+          ```
+          
+          ---
+          
+          ## 🧪 TESTING CHECKLIST:
+          
+          - [ ] Install SystemHealth.tipa
+          - [ ] Jailbreak successful
+          - [ ] Open banking app (không crash)
+          - [ ] Enable Crane/VBox
+          - [ ] Test tweak injection
+          - [ ] Verify bypass working
+          
+          ---
+          
+          ## 🆘 TROUBLESHOOTING:
+          
+          ### ❌ Vẫn bị phát hiện JB:
+          1. Xóa Dopamine app gốc (nếu có)
+          2. Xóa Sileo/Zebra
+          3. Cài Shadow/KernBypass
+          4. Respring
+          
+          ### ❌ Crane/VBox không inject:
+          1. KHÔNG bật roothide blacklist
+          2. Cài Choicy → Whitelist mode
+          3. Hoặc dùng Shadow Custom mode
+          
+          ### ❌ App crash khi jailbreak:
+          1. Restore rootFS
+          2. Reboot không jailbreak
+          3. Cài lại SystemHealth
+          4. Jailbreak lại
+          
+          ---
+          
+          **Build Date**: $(date)  
+          **Version**: ${version}
+          EOF
+          
+          cat Application/STEALTH_REPORT.md
+        env:
+          version: ${{ env.version }}
+
+      - name: 📤 Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: SystemHealth-Stealth-${{ env.version }}
+          path: |
+            Application/SystemHealth-${{ env.version }}.tipa
+            Application/STEALTH_REPORT.md
+          retention-days: 30
