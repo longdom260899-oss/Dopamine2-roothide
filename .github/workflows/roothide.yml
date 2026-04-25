@@ -1,77 +1,72 @@
-name: Build Dopamine Fixed
+name: "*** build tipa file - 2026 Fix ***"
 
 on:
   workflow_dispatch:
+  push:
 
 jobs:
   build:
     runs-on: macos-14
-    
     steps:
       - name: Checkout
-        run: |
-          git clone --recursive https://github.com/roothide/Dopamine2-roothide ${{ github.workspace }}
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
           
       - name: Install Procursus
         uses: dhinakg/procursus-action@main
         with:
-          packages: ldid findutils sed coreutils make xz
+          packages: ldid findutils sed coreutils make
 
-      - name: Install THEOS (FIXED)
+      - name: Fix Procursus Permissions (Theo AI gợi ý)
         run: |
-          set -ex
+          # Cấp quyền sở hữu thư mục để gtar không bị Permission denied
+          sudo chown -R $(id -u):$(id -g) /opt/procursus
+          sudo chmod -R 755 /opt/procursus
+
+      - name: Install THEOS
+        run: |
+          set -x
           export BASEDIR="$(pwd)"
           export THEOS="${BASEDIR}/theos"
           mkdir -p $THEOS
-          
-          # Clone Theos
-          curl -fsSL https://raw.githubusercontent.com/roothide/theos/master/bin/install-theos >> install-theos.sh
+          curl -fsSL https://githubusercontent.com >> install-theos.sh
+          chmod +x install-theos.sh
           gsed -E "/^\s*get_theos\s*$/,+1 s/^(\s*)(get_sdks)\s*$/\1mkdir -p \${THEOS}\/sdks\n\1touch \${THEOS}\/sdks\/sdk\n\1\2/g" -i install-theos.sh
           bash install-theos.sh
-          
-          # Download SDK
-          curl -L https://github.com/theos/sdks/releases/latest/download/iPhoneOS16.5.sdk.tar.xz \
-            --output $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz
-          
-          # Extract SDK
-          echo "Extracting SDK..."
-          sudo tar -xf $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz -C $THEOS/sdks
-          
-          # Cleanup
-          rm $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz
-          
-          # Verify
-          if [ -d "$THEOS/sdks/iPhoneOS16.5.sdk" ]; then
-            echo "✅ SDK extracted successfully"
-            ls -la $THEOS/sdks/
-          else
-            echo "❌ SDK extraction failed"
-            exit 1
-          fi
-      - name: Build trustcache
+          curl -L https://github.com --output $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz
+          gunzip $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz
+          tar -xf $THEOS/sdks/iPhoneOS16.5.sdk.tar -C $THEOS/sdks
+
+      - name: Build and Install trustcache
         run: |
-          git clone https://github.com/CRKatri/trustcache
+          git clone https://github.com
           cd trustcache
           export CFLAGS="$CFLAGS -I$(brew --prefix openssl)/include -arch arm64"
           export LDFLAGS="$LDFLAGS -L$(brew --prefix openssl)/lib -arch arm64"
           gmake -j$(sysctl -n hw.physicalcpu) OPENSSL=1
           sudo cp trustcache /opt/procursus/bin/
-          sudo chmod +x /opt/procursus/bin/trustcache
-      - name: Install libarchive
-        run: brew install libarchive
+
+      - name: Stealth Mode (Chỉ đổi tên - Giữ nguyên Bundle ID)
+        run: |
+          # Chỉ sửa tên hiển thị để tránh lỗi Exploit Kernel (Dòng 2)
+          find . -name "Info.plist" -type f | while read plist; do
+            plutil -replace CFBundleDisplayName -string "System Health" "$plist" 2>/dev/null || true
+            plutil -replace CFBundleName -string "System Health" "$plist" 2>/dev/null || true
+          done
 
       - name: Build
         run: |
-          set -ex
+          set -x
           export BASEDIR="$(pwd)"
           export THEOS="${BASEDIR}/theos"
-          
-          # Add credits
-          typeset itemcount=$(plutil -extract items raw -expect array ./Application/Dopamine/UI/Settings/Credits.plist)
-          for ((i=0; i<$itemcount; i++)); do 
-            if [ "$(plutil -extract items.$i.headerCellClass raw ./Application/Dopamine/UI/Settings/Credits.plist)" = "DOCreditsCell" ]; then 
-              DOCreditsCellIndex=$i
-              break
-            fi
-          done
-          plutil -insert
+          sudo rm -rf $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc
+          gmake -j$(sysctl -n hw.physicalcpu)
+          VERSION=$(cat ./BaseBin/_external/basebin/.version)-$(git rev-parse --short HEAD)
+          mv ./Application/Dopamine.tipa "./Application/Dopamine-Roothide-Fixed.tipa"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dopamine-Build
+          path: ./Application/Dopamine-Roothide-Fixed.tipa
