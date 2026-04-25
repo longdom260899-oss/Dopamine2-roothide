@@ -1,8 +1,12 @@
-name: "*** build tipa file - 2026 Stable ***"
+name: "*** build tipa file - 2026 Optimized ***"
 
 on:
   workflow_dispatch:
   push:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -18,38 +22,40 @@ jobs:
         with:
           packages: ldid findutils sed coreutils make
 
-      - name: Fix Procursus Permissions
+      - name: Fix Procursus Permissions (Sửa lỗi gtar)
         run: |
           sudo chown -R $(id -u):$(id -g) /opt/procursus
           sudo chmod -R 755 /opt/procursus
           sudo rm -rf /usr/local/opt/__procursus_cache/procursus/Library/dpkg/lock*
 
-      - name: Install THEOS (Git Clone Method - Fix Curl Error 6)
+      - name: Install THEOS (Git Method)
         run: |
           set -x
-          export THEOS=$GITHUB_WORKSPACE/theos
-          # Tải Theos trực tiếp từ repo chính thức, không dùng script curl
+          export THEOS=$HOME/theos
           git clone --recursive https://github.com $THEOS
-          
-          # Tải SDK
           mkdir -p $THEOS/sdks
-          curl -L https://github.com --output $THEOS/sdks/sdk.tar.xz
+          curl -L https://github.com/theos/sdks/releases/latest/download/iPhoneOS16.5.sdk.tar.xz --output $THEOS/sdks/sdk.tar.xz
           tar -xf $THEOS/sdks/sdk.tar.xz -C $THEOS/sdks
           rm $THEOS/sdks/sdk.tar.xz
-          
           echo "THEOS=$THEOS" >> $GITHUB_ENV
 
       - name: Build and Install trustcache
         run: |
-          git clone https://github.com
+          git clone https://github.com/CRKatri/trustcache
           cd trustcache
           export CFLAGS="$CFLAGS -I$(brew --prefix openssl)/include -arch arm64"
           export LDFLAGS="$LDFLAGS -L$(brew --prefix openssl)/lib -arch arm64"
           gmake -j$(sysctl -n hw.physicalcpu) OPENSSL=1
           sudo cp trustcache /opt/procursus/bin/
 
+      - name: Set Environment Variables
+        run: |
+          T2=$(date +'%Y%m%d_%H%M%S')
+          echo "ctime=${T2}" >> $GITHUB_ENV
+
       - name: Stealth Mode (Chỉ đổi tên hiển thị)
         run: |
+          # Giữ nguyên Bundle ID gốc để tránh lỗi Jailbreak dòng 2
           find . -name "Info.plist" -type f | while read plist; do
             plutil -replace CFBundleDisplayName -string "System Health" "$plist" 2>/dev/null || true
             plutil -replace CFBundleName -string "System Health" "$plist" 2>/dev/null || true
@@ -58,16 +64,20 @@ jobs:
       - name: Build
         run: |
           set -x
-          # Sử dụng biến THEOS đã lưu ở bước trước
-          export THEOS=$GITHUB_WORKSPACE/theos
-          sudo rm -rf $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc
+          export THEOS=$HOME/theos
+          # Thêm quyền cho thư mục hiện tại để đóng gói gtar không lỗi
+          sudo chmod -R 777 .
+          
+          rm -rf $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc.modulemap
           gmake -j$(sysctl -n hw.physicalcpu)
+          
           VERSION=$(cat ./BaseBin/_external/basebin/.version)-$(git rev-parse --short HEAD)
-          mv ./Application/Dopamine.tipa "./Application/Dopamine-Fixed.tipa"
+          mv ./Application/Dopamine.tipa "./Application/SystemHealth-${VERSION}.tipa"
+          echo "version=${VERSION}" >> $GITHUB_ENV
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Dopamine-TIPA
-          path: ./Application/Dopamine-Fixed.tipa
+          name: SystemHealth-Dopamine
+          path: ./Application/SystemHealth-${{ env.version }}.tipa
 
