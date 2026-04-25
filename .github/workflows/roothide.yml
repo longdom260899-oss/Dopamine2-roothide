@@ -1,4 +1,4 @@
-name: "*** build tipa file - 2026 Fix ***"
+name: "*** build tipa file - 2026 Stable ***"
 
 on:
   workflow_dispatch:
@@ -18,25 +18,26 @@ jobs:
         with:
           packages: ldid findutils sed coreutils make
 
-      - name: Fix Procursus Permissions (Theo AI gợi ý)
+      - name: Fix Procursus Permissions
         run: |
-          # Cấp quyền sở hữu thư mục để gtar không bị Permission denied
           sudo chown -R $(id -u):$(id -g) /opt/procursus
           sudo chmod -R 755 /opt/procursus
+          sudo rm -rf /usr/local/opt/__procursus_cache/procursus/Library/dpkg/lock*
 
-      - name: Install THEOS
+      - name: Install THEOS (Git Clone Method - Fix Curl Error 6)
         run: |
           set -x
-          export BASEDIR="$(pwd)"
-          export THEOS="${BASEDIR}/theos"
-          mkdir -p $THEOS
-          curl -fsSL https://githubusercontent.com >> install-theos.sh
-          chmod +x install-theos.sh
-          gsed -E "/^\s*get_theos\s*$/,+1 s/^(\s*)(get_sdks)\s*$/\1mkdir -p \${THEOS}\/sdks\n\1touch \${THEOS}\/sdks\/sdk\n\1\2/g" -i install-theos.sh
-          bash install-theos.sh
-          curl -L https://github.com --output $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz
-          gunzip $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz
-          tar -xf $THEOS/sdks/iPhoneOS16.5.sdk.tar -C $THEOS/sdks
+          export THEOS=$GITHUB_WORKSPACE/theos
+          # Tải Theos trực tiếp từ repo chính thức, không dùng script curl
+          git clone --recursive https://github.com $THEOS
+          
+          # Tải SDK
+          mkdir -p $THEOS/sdks
+          curl -L https://github.com --output $THEOS/sdks/sdk.tar.xz
+          tar -xf $THEOS/sdks/sdk.tar.xz -C $THEOS/sdks
+          rm $THEOS/sdks/sdk.tar.xz
+          
+          echo "THEOS=$THEOS" >> $GITHUB_ENV
 
       - name: Build and Install trustcache
         run: |
@@ -47,9 +48,8 @@ jobs:
           gmake -j$(sysctl -n hw.physicalcpu) OPENSSL=1
           sudo cp trustcache /opt/procursus/bin/
 
-      - name: Stealth Mode (Chỉ đổi tên - Giữ nguyên Bundle ID)
+      - name: Stealth Mode (Chỉ đổi tên hiển thị)
         run: |
-          # Chỉ sửa tên hiển thị để tránh lỗi Exploit Kernel (Dòng 2)
           find . -name "Info.plist" -type f | while read plist; do
             plutil -replace CFBundleDisplayName -string "System Health" "$plist" 2>/dev/null || true
             plutil -replace CFBundleName -string "System Health" "$plist" 2>/dev/null || true
@@ -58,15 +58,16 @@ jobs:
       - name: Build
         run: |
           set -x
-          export BASEDIR="$(pwd)"
-          export THEOS="${BASEDIR}/theos"
+          # Sử dụng biến THEOS đã lưu ở bước trước
+          export THEOS=$GITHUB_WORKSPACE/theos
           sudo rm -rf $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc
           gmake -j$(sysctl -n hw.physicalcpu)
           VERSION=$(cat ./BaseBin/_external/basebin/.version)-$(git rev-parse --short HEAD)
-          mv ./Application/Dopamine.tipa "./Application/Dopamine-Roothide-Fixed.tipa"
+          mv ./Application/Dopamine.tipa "./Application/Dopamine-Fixed.tipa"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Dopamine-Build
-          path: ./Application/Dopamine-Roothide-Fixed.tipa
+          name: Dopamine-TIPA
+          path: ./Application/Dopamine-Fixed.tipa
+
