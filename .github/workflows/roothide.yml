@@ -9,10 +9,9 @@ jobs:
     runs-on: macos-14
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          repository: roothide/Dopamine2-roothide
-          submodules: recursive
+        run: |
+          set -x
+          git clone --recursive https://github.com/roothide/Dopamine2-roothide ${{ github.workspace }}
 
       - name: Install Procursus
         uses: dhinakg/procursus-action@main
@@ -21,30 +20,39 @@ jobs:
 
       - name: Install THEOS
         run: |
-          export THEOS="${PWD}/theos"
-          git clone --recursive https://github.com/theos/theos.git $THEOS
-          curl -L https://github.com/theos/sdks/releases/latest/download/iPhoneOS16.5.sdk.tar.xz -o sdk.tar.xz
-          tar -xJf sdk.tar.xz -C $THEOS/sdks
+          set -x
+          export BASEDIR="$(pwd)"
+          export THEOS="${BASEDIR}/theos"
+          mkdir -p $THEOS
+          curl -fsSL https://raw.githubusercontent.com/roothide/theos/master/bin/install-theos >> install-theos.sh
+          gsed -E "/^\s*get_theos\s*$/,+1 s/^(\s*)(get_sdks)\s*$/\1mkdir -p \${THEOS}\/sdks\n\1touch \${THEOS}\/sdks\/sdk\n\1\2/g" -i install-theos.sh
+          bash install-theos.sh
+          curl -L https://github.com/theos/sdks/releases/latest/download/iPhoneOS16.5.sdk.tar.xz --output $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz
+          gunzip $THEOS/sdks/iPhoneOS16.5.sdk.tar.xz
+          tar -xf $THEOS/sdks/iPhoneOS16.5.sdk.tar -C $THEOS/sdks
+          rm $THEOS/sdks/iPhoneOS16.5.sdk.tar
+          cd $BASEDIR
 
-      - name: Build trustcache
+      - name: Build and Install trustcache
         run: |
+          set -x
           git clone https://github.com/CRKatri/trustcache
           cd trustcache
-          export CFLAGS="-I$(brew --prefix openssl)/include -arch arm64"
-          export LDFLAGS="-L$(brew --prefix openssl)/lib -arch arm64"
+          export CFLAGS="$CFLAGS -I$(brew --prefix openssl)/include -arch arm64"
+          export LDFLAGS="$LDFLAGS -L$(brew --prefix openssl)/lib -arch arm64"
           gmake -j$(sysctl -n hw.physicalcpu) OPENSSL=1
           sudo cp trustcache /opt/procursus/bin/
 
-      - name: Build BaseBin
+      - name: Install libarchive
         run: |
-          export THEOS="${PWD}/theos"
-          cd basebinaries
-          gmake -j$(sysctl -n hw.physicalcpu)
-          cd ..
+          brew install libarchive
 
-      - name: Build Dopamine
+      - name: Build Dopamine (Includes BaseBin)
         run: |
-          export THEOS="${PWD}/theos"
+          set -x
+          export BASEDIR="$(pwd)"
+          export THEOS="${BASEDIR}/theos"
+          rm -rf $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc $(xcrun --sdk iphoneos --show-sdk-path)/usr/include/xpc.modulemap
           gmake -j$(sysctl -n hw.physicalcpu)
 
       - name: Advanced Stealth Modification
@@ -61,8 +69,8 @@ jobs:
           echo "=== PHASE 2: Remove Visual Traces ==="
           rm -f AppIcon*.png
           
-          echo "=== PHASE 3: Remove URL Schemes (Anti-Detection) ==="
-          plutil -remove CFBundleURLTypes Info.plist 2>/dev/null || echo "No URL schemes found"
+          echo "=== PHASE 3: Remove URL Schemes ==="
+          plutil -remove CFBundleURLTypes Info.plist 2>/dev/null || echo "No URL schemes"
           
           echo "=== PHASE 4: Fake System Version ==="
           plutil -replace CFBundleVersion -string "1.0" Info.plist
@@ -72,14 +80,14 @@ jobs:
           plutil -remove UIBackgroundModes Info.plist 2>/dev/null || true
           plutil -remove LSApplicationQueriesSchemes Info.plist 2>/dev/null || true
           
-          echo "=== PHASE 6: Fake Minimum OS (Look Like System App) ==="
+          echo "=== PHASE 6: Fake Minimum OS ==="
           plutil -replace MinimumOSVersion -string "15.0" Info.plist
           
           echo "=== PHASE 7: Package ==="
           cd ../..
           zip -qr SystemHealth.tipa Payload
           
-          echo "=== BUILD SUCCESS ==="
+          echo "=== SUCCESS ==="
           ls -lh SystemHealth.tipa
 
       - name: Upload Artifact
